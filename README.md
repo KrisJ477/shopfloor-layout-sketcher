@@ -9,11 +9,18 @@ fully offline once loaded.
 
 ## Features
 
-- **Floor to scale** — set floor width/depth in meters, centimeters, feet, or inches
+- **Floor plan background** — the Vån 1 plan (`floorplan.png`) is drawn to scale
+  under the layout (its grid squares are 3×3 m); toggle it in floor settings
+- **Select to move** — items only move while selected; tap to select, then drag
+- **Rotate gizmo** — a selected item shows a rotation knob that snaps to 45° steps
+- **Double-tap to edit** — edit mode per item: switch the core between rectangle
+  and circle, and drag translucent clearance zones (individual depth per side of
+  a rectangle, extra radius ring on a circle) with touch-friendly handles
+- **Pen / touch / mouse** — pointer-events based, works with Apple Pencil on
+  iPad and mouse + wheel zoom on desktop
 - **Item presets** — workbench, machine, table saw, shelf, pallet, cabinet, or custom
-- **Touch-first canvas** — drag to move items, pinch to zoom, drag empty space to pan
-- **Grid snapping** — configurable grid size (or off)
-- **Edit in place** — rename, resize, recolor, rotate 90°, duplicate, delete
+- **Grid snapping** — configurable snap size (or off)
+- **Duplicate / delete / rename / recolor** — from the selection panel
 - **Autosave** — layout persists in the browser (localStorage)
 - **Export / import** — PNG snapshot for sharing, JSON for backup/restore
 - **Offline PWA** — add to home screen and use it on the shop floor without a connection

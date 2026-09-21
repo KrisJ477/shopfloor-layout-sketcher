@@ -23,7 +23,7 @@
     font-family:-apple-system,"Segoe UI",Roboto,sans-serif;
     display:flex; flex-direction:column;
     padding:max(.4rem,env(safe-area-inset-top)) .55rem max(.4rem,env(safe-area-inset-bottom));
-    gap:.4rem; user-select:none; touch-action:none;
+    gap:.4rem; user-select:none; -webkit-user-select:none; touch-action:none;
   }
 
   /* ---------------- header ---------------- */
@@ -48,6 +48,25 @@
   #hint {
     position:absolute; left:50%; bottom:.5rem; transform:translateX(-50%);
     font-size:.65rem; color:var(--faint); pointer-events:none; white-space:nowrap;
+    max-width:96%; overflow:hidden; text-overflow:ellipsis;
+  }
+  #editbar {
+    position:absolute; top:.5rem; left:50%; transform:translateX(-50%);
+    display:none; align-items:center; gap:.35rem; z-index:5;
+    background:rgba(25,28,33,.94); border:1px solid var(--line);
+    border-radius:.6rem; padding:.3rem .35rem;
+  }
+  #editbar.show { display:flex; }
+  #editbar .seg {
+    border:1px solid var(--line); border-radius:.45rem; padding:.4rem .6rem;
+    font:inherit; font-size:.7rem; font-weight:800; letter-spacing:.04em;
+    background:var(--bg); color:var(--dim);
+  }
+  #editbar .seg.on { background:#2b2213; color:var(--accent); border-color:#5a4a17; }
+  #editbar .done {
+    border:0; border-radius:.45rem; padding:.42rem .7rem;
+    font:inherit; font-size:.7rem; font-weight:800; letter-spacing:.05em;
+    background:#0f2b1a; color:var(--good);
   }
 
   /* ---------------- selection panel ---------------- */
@@ -109,6 +128,7 @@
     background:var(--bg); color:var(--ink); border:1px solid var(--line);
     border-radius:.45rem; padding:.45rem .5rem;
   }
+  input[type=checkbox] { width:1.2rem; height:1.2rem; accent-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -122,7 +142,12 @@
 
 <div id="wrap">
   <canvas id="cv"></canvas>
-  <div id="hint">drag empty space to pan · pinch to zoom · tap an item to select</div>
+  <div id="editbar">
+    <button class="seg" id="ebRect">▭ RECT</button>
+    <button class="seg" id="ebCirc">◯ CIRCLE</button>
+    <button class="done" id="ebDone">✓ DONE</button>
+  </div>
+  <div id="hint"></div>
 </div>
 
 <div id="panel">
@@ -130,13 +155,19 @@
     <input type="text" id="pName" placeholder="Name">
     <input type="color" id="pColor">
   </div>
-  <div class="row">
-    <label>W</label><input type="number" id="pW" min="1" step="any">
-    <label>D</label><input type="number" id="pD" min="1" step="any">
+  <div class="row" id="rowOv">
+    <label id="pWLabel">W</label><input type="number" id="pW" min="0.01" step="any">
+    <span id="pDWrap"><label>D</label> <input type="number" id="pD" min="0.01" step="any"></span>
     <span style="flex:1"></span>
-    <button class="btn" id="pRot">⟳ 90°</button>
+    <button class="btn" id="pRot">⟳ 45°</button>
     <button class="btn" id="pDup">DUP</button>
     <button class="btn warn" id="pDel">DEL</button>
+  </div>
+  <div class="row" id="rowEdit" style="display:none">
+    <label id="epLabel">CORE</label>
+    <input type="number" id="eA" min="0" step="any">
+    <input type="number" id="eB" min="0" step="any">
+    <span style="flex:1;font-size:.6rem;color:var(--dim)" id="epHint"></span>
   </div>
 </div>
 
@@ -161,8 +192,12 @@
       <label>D</label><input type="number" id="fD" min="1" step="any">
     </div>
     <div class="row">
-      <label>GRID</label><input type="number" id="fGrid" min="0" step="any">
+      <label>SNAP</label><input type="number" id="fGrid" min="0" step="any">
       <span style="font-size:.6rem;color:var(--dim)">0 = no snap</span>
+    </div>
+    <div class="row">
+      <label>PLAN</label><input type="checkbox" id="fBg">
+      <span style="font-size:.6rem;color:var(--dim)">show Vån 1 background (grid = 3×3 m)</span>
     </div>
     <div class="row">
       <button class="btn acc" id="fApply" style="flex:1">APPLY</button>
@@ -186,19 +221,65 @@ const UNITS = { m:100, cm:1, ft:30.48, in:2.54 };
 const toCm   = (v,u)=>v*UNITS[u];
 const fromCm = (v,u)=>v/UNITS[u];
 const fmt = v => (Math.round(v*100)/100).toString();
+const RAD = Math.PI/180;
+
+/* ============ background plan (Vån 1, grid squares = 3 m) ============ */
+const BG = { src:"./floorplan.png", w:7675, d:11470 };   // cm — 540×807 px @ 14.213 cm/px
+const bgImg = new Image();
+bgImg.src = BG.src;
+bgImg.onload = ()=>draw();
 
 /* ============ state ============ */
-const KEY = "sfls-state-v1";
+const KEY  = "sfls-state-v2";
+const KEY1 = "sfls-state-v1";
 let S = {
   unit:"m",
-  floor:{ w:1000, d:800 },      // cm
-  grid:25,                      // cm, 0 = off
-  items:[]                      // {id,name,w,d,x,y,rot,color} — x,y = center, cm
+  floor:{ w:BG.w, d:BG.d },     // cm
+  grid:25,                      // move-snap in cm, 0 = off
+  bg:true,
+  items:[]
 };
-try {
-  const raw = localStorage.getItem(KEY);
-  if (raw) { const p = JSON.parse(raw); if (p && p.floor && Array.isArray(p.items)) S = p; }
-} catch (e) {}
+/* item: {id,name,color,shape:"rect"|"circle",x,y,rot,w,d,clr:{t,r,b,l},clrR}
+   x,y = center (cm); rot in degrees; circle: w=d=diameter;
+   clr = per-side clearance depth (rect, cm); clrR = extra clearance radius (circle, cm) */
+function normItem(it) {
+  return {
+    id: it.id ?? (Date.now()+Math.random()),
+    name: it.name || "Item",
+    color: it.color || "#6fb4ff",
+    shape: it.shape === "circle" ? "circle" : "rect",
+    x: +it.x || 0, y: +it.y || 0,
+    rot: ((Math.round((+it.rot || 0)/45)*45) % 360 + 360) % 360,
+    w: Math.max(1, +it.w || 100),
+    d: Math.max(1, +it.d || 100),
+    clr: { t:Math.max(0,+(it.clr?.t)||0), r:Math.max(0,+(it.clr?.r)||0),
+           b:Math.max(0,+(it.clr?.b)||0), l:Math.max(0,+(it.clr?.l)||0) },
+    clrR: Math.max(0, +it.clrR || 0),
+  };
+}
+function loadState() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && p.floor && Array.isArray(p.items)) {
+        S = { unit:p.unit||"m", floor:p.floor, grid:+p.grid||0,
+              bg:p.bg!==false, items:p.items.map(normItem) };
+        return;
+      }
+    }
+    const raw1 = localStorage.getItem(KEY1);      // migrate old layouts onto the plan
+    if (raw1) {
+      const p = JSON.parse(raw1);
+      if (p && Array.isArray(p.items)) {
+        S.unit = p.unit || "m";
+        S.grid = +p.grid || 25;
+        S.items = p.items.map(normItem);
+      }
+    }
+  } catch (e) {}
+}
+loadState();
 let saveT = 0;
 function save() {
   clearTimeout(saveT);
@@ -230,38 +311,189 @@ function fitView() {
 const px = (cx,cy)=>[view.x + cx*view.scale, view.y + cy*view.scale];
 const cm = (x,y)=>[(x - view.x)/view.scale, (y - view.y)/view.scale];
 
-/* ============ items ============ */
-let selId = null;
+/* ============ geometry ============ */
+let selId  = null;                 // selected item (overview)
+let editId = null;                 // item in edit mode, null = overview
+let editPart = "core";             // core | t | r | b | l | ring
 const sel = ()=>S.items.find(i=>i.id===selId) || null;
-const eff = it => (it.rot % 180) ? { w:it.d, d:it.w } : { w:it.w, d:it.d };
+const editItem = ()=>S.items.find(i=>i.id===editId) || null;
+const editing = ()=>!!editItem();
 
-function hit(cxp, cyp) {
-  for (let i = S.items.length-1; i >= 0; i--) {
-    const it = S.items[i], e = eff(it);
-    if (Math.abs(cxp-it.x) <= e.w/2 && Math.abs(cyp-it.y) <= e.d/2) return it;
+function toLocal(x0, y0, rot, cxp, cyp) {   // world cm -> item-local cm
+  const a = -rot*RAD, dx = cxp-x0, dy = cyp-y0;
+  return [dx*Math.cos(a)-dy*Math.sin(a), dx*Math.sin(a)+dy*Math.cos(a)];
+}
+function toWorld(x0, y0, rot, lx, ly) {
+  const a = rot*RAD;
+  return [x0 + lx*Math.cos(a)-ly*Math.sin(a), y0 + lx*Math.sin(a)+ly*Math.cos(a)];
+}
+function partAt(it, cxp, cyp) {    // which body part is under a world point
+  const [lx,ly] = toLocal(it.x, it.y, it.rot, cxp, cyp);
+  if (it.shape === "circle") {
+    const rr = Math.hypot(lx,ly), r = it.w/2;
+    if (rr <= r) return "core";
+    if (rr <= r + it.clrR) return "ring";
+    return null;
+  }
+  const w2 = it.w/2, d2 = it.d/2, c = it.clr;
+  if (Math.abs(lx) <= w2 && Math.abs(ly) <= d2) return "core";
+  if (Math.abs(lx) <= w2 && ly < -d2 && ly >= -d2 - c.t) return "t";
+  if (Math.abs(lx) <= w2 && ly >  d2 && ly <=  d2 + c.b) return "b";
+  if (Math.abs(ly) <= d2 && lx < -w2 && lx >= -w2 - c.l) return "l";
+  if (Math.abs(ly) <= d2 && lx >  w2 && lx <=  w2 + c.r) return "r";
+  return null;
+}
+function hit(cxp, cyp) {           // topmost item: cores first, then clearance zones
+  for (let i = S.items.length-1; i >= 0; i--)
+    if (partAt(S.items[i], cxp, cyp) === "core") return S.items[i];
+  for (let i = S.items.length-1; i >= 0; i--)
+    if (partAt(S.items[i], cxp, cyp)) return S.items[i];
+  return null;
+}
+function outerRadius(it) {         // cm, item center to farthest clearance corner
+  if (it.shape === "circle") return it.w/2 + it.clrR;
+  const c = it.clr;
+  return Math.hypot(it.w/2 + Math.max(c.l,c.r), it.d/2 + Math.max(c.t,c.b));
+}
+function snap(v) { return S.grid > 0 ? Math.round(v/S.grid)*S.grid : v; }
+
+/* ============ gizmo & handles ============ */
+function gizmoRadius(it) { return Math.max(44, outerRadius(it)*view.scale + 26); }  // px
+function knobPos(it) {
+  const R = gizmoRadius(it), a = (it.rot-90)*RAD;
+  const [sx,sy] = px(it.x, it.y);
+  return [sx + Math.cos(a)*R, sy + Math.sin(a)*R];
+}
+function editHandles(it) {         // local-cm handle positions for edit mode
+  if (it.shape === "circle") {
+    const r = it.w/2, R = r + it.clrR, k = Math.SQRT1_2;
+    return [
+      { part:"core", x:r,   y:0,    kind:"core" },
+      { part:"ring", x:R*k, y:-R*k, kind:"clr"  },
+    ];
+  }
+  const w2 = it.w/2, d2 = it.d/2, c = it.clr;
+  return [
+    { part:"coreL", x:-w2, y:0,   kind:"core" },
+    { part:"coreR", x: w2, y:0,   kind:"core" },
+    { part:"coreT", x:0,   y:-d2, kind:"core" },
+    { part:"coreB", x:0,   y: d2, kind:"core" },
+    { part:"t", x:-w2/2,    y:-d2-c.t, kind:"clr" },
+    { part:"b", x:-w2/2,    y: d2+c.b, kind:"clr" },
+    { part:"l", x:-w2-c.l,  y:-d2/2,  kind:"clr" },
+    { part:"r", x: w2+c.r,  y:-d2/2,  kind:"clr" },
+  ];
+}
+const partOf = h => h.startsWith("core") ? "core" : h;   // handle id -> panel part
+function handleAtScreen(it, sx, sy) {
+  for (const h of editHandles(it)) {
+    const [wx,wy] = toWorld(it.x, it.y, it.rot, h.x, h.y);
+    const [hx,hy] = px(wx,wy);
+    if (Math.hypot(sx-hx, sy-hy) < 22) return h;
   }
   return null;
 }
-function snap(v) { return S.grid > 0 ? Math.round(v/S.grid)*S.grid : v; }
-function snapItem(it) {
-  const e = eff(it);
-  it.x = snap(it.x - e.w/2) + e.w/2;
-  it.y = snap(it.y - e.d/2) + e.d/2;
+function applyHandleDrag(h, cxp, cyp) {
+  const it = h.it, MIN = 10;
+  const [lx,ly] = toLocal(h.x0, h.y0, it.rot, cxp, cyp);
+  const setCenter = (sx,sy)=>{ [it.x,it.y] = toWorld(h.x0, h.y0, it.rot, sx, sy); };
+  const pos = v => Math.max(0, Math.round(v));
+  if (it.shape === "circle") {
+    if (h.part === "core") { const r = Math.max(MIN/2, Math.hypot(lx,ly)); it.w = it.d = Math.round(r*2); }
+    else                   { it.clrR = pos(Math.hypot(lx,ly) - it.w/2); }
+    return;
+  }
+  switch (h.part) {
+    case "coreR": { const l=-h.w0/2, r=Math.max(lx, l+MIN); it.w=Math.round(r-l); setCenter((r+l)/2, 0); break; }
+    case "coreL": { const r= h.w0/2, l=Math.min(lx, r-MIN); it.w=Math.round(r-l); setCenter((r+l)/2, 0); break; }
+    case "coreB": { const t=-h.d0/2, b=Math.max(ly, t+MIN); it.d=Math.round(b-t); setCenter(0, (b+t)/2); break; }
+    case "coreT": { const b= h.d0/2, t=Math.min(ly, b-MIN); it.d=Math.round(b-t); setCenter(0, (b+t)/2); break; }
+    case "t": it.clr.t = pos(-ly - it.d/2); break;
+    case "b": it.clr.b = pos( ly - it.d/2); break;
+    case "l": it.clr.l = pos(-lx - it.w/2); break;
+    case "r": it.clr.r = pos( lx - it.w/2); break;
+  }
 }
 
 /* ============ drawing ============ */
-function drawScene(g, scale, ox, oy, w, h) {
+const CLR_FILL = "rgba(111,180,255,0.16)", CLR_LINE = "rgba(111,180,255,0.55)";
+function drawItem(g, it, scale, P, opts) {
+  const { selected=false, dimmed=false, edit=false } = opts || {};
+  const [cx,cy] = P(it.x, it.y);
+  g.save();
+  if (dimmed) g.globalAlpha = 0.25;
+  g.translate(cx, cy);
+  g.rotate(it.rot*RAD);
+
+  const hl = part => edit && editPart === part;
+  const hlStroke = ()=>{ g.strokeStyle = "#ffc400"; g.lineWidth = 2.5; g.setLineDash([6,4]); };
+
+  if (it.shape === "circle") {
+    const r = it.w/2*scale, R = (it.w/2 + it.clrR)*scale;
+    if (it.clrR > 0 || edit) {
+      g.beginPath(); g.arc(0,0,R,0,Math.PI*2);
+      g.fillStyle = CLR_FILL; g.fill();
+      g.strokeStyle = CLR_LINE; g.lineWidth = 1; g.setLineDash([5,4]); g.stroke(); g.setLineDash([]);
+      if (hl("ring")) { g.beginPath(); g.arc(0,0,R,0,Math.PI*2); hlStroke(); g.stroke(); g.setLineDash([]); }
+    }
+    g.beginPath(); g.arc(0,0,r,0,Math.PI*2);
+    g.fillStyle = it.color + "66"; g.fill();
+    g.strokeStyle = it.color; g.lineWidth = selected ? 3 : 1.5; g.stroke();
+    if (hl("core")) { g.beginPath(); g.arc(0,0,r,0,Math.PI*2); hlStroke(); g.stroke(); g.setLineDash([]); }
+  } else {
+    const w = it.w*scale, h = it.d*scale, c = it.clr;
+    const zones = { t:[-w/2, -h/2 - c.t*scale, w, c.t*scale],
+                    b:[-w/2,  h/2,             w, c.b*scale],
+                    l:[-w/2 - c.l*scale, -h/2, c.l*scale, h],
+                    r:[ w/2,             -h/2, c.r*scale, h] };
+    for (const k in zones) {
+      const z = zones[k];
+      if (z[2] < 0.5 || z[3] < 0.5) { if (hl(k)) { hlStroke(); g.strokeRect(...z); g.setLineDash([]); } continue; }
+      g.fillStyle = CLR_FILL; g.fillRect(...z);
+      g.strokeStyle = CLR_LINE; g.lineWidth = 1; g.setLineDash([5,4]); g.strokeRect(...z); g.setLineDash([]);
+      if (hl(k)) { hlStroke(); g.strokeRect(...z); g.setLineDash([]); }
+    }
+    g.fillStyle = it.color + "66";
+    g.strokeStyle = it.color; g.lineWidth = selected ? 3 : 1.5;
+    g.fillRect(-w/2, -h/2, w, h); g.strokeRect(-w/2, -h/2, w, h);
+    if (hl("core")) { hlStroke(); g.strokeRect(-w/2, -h/2, w, h); g.setLineDash([]); }
+  }
+
+  // label (kept horizontal)
+  const iw = it.w*scale, ih = it.d*scale;
+  if (iw > 24 && ih > 14) {
+    g.rotate(-it.rot*RAD);
+    const fs = Math.max(9, Math.min(15, iw/6));
+    g.fillStyle = dimmed ? "#8b929c" : "#e9ecf0";
+    g.font = `700 ${fs}px -apple-system,'Segoe UI',Roboto,sans-serif`;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(it.name, 0, 0, Math.max(iw,ih)-6);
+    if (Math.min(iw,ih) > fs*3) {
+      g.fillStyle = "#8b929c"; g.font = `600 ${fs*0.75}px -apple-system,'Segoe UI',Roboto,sans-serif`;
+      const dims = it.shape === "circle"
+        ? `Ø ${fmt(fromCm(it.w,S.unit))}`
+        : `${fmt(fromCm(it.w,S.unit))}×${fmt(fromCm(it.d,S.unit))}`;
+      g.fillText(dims, 0, fs, Math.max(iw,ih)-6);
+    }
+  }
+  g.restore();
+}
+function drawScene(g, scale, ox, oy, w, h, ui) {
   g.fillStyle = "#0b0d10"; g.fillRect(0,0,w,h);
   const P = (x,y)=>[ox + x*scale, oy + y*scale];
 
-  // floor
+  // floor + background plan
   const [fx,fy] = P(0,0);
   const fw = S.floor.w*scale, fh = S.floor.d*scale;
   g.fillStyle = "#14171c"; g.fillRect(fx,fy,fw,fh);
+  if (S.bg && bgImg.complete && bgImg.naturalWidth) {
+    g.imageSmoothingEnabled = true;
+    g.drawImage(bgImg, fx, fy, BG.w*scale, BG.d*scale);
+  }
 
-  // grid
+  // snap grid
   if (S.grid > 0 && S.grid*scale >= 6) {
-    g.strokeStyle = "#1c2027"; g.lineWidth = 1;
+    g.strokeStyle = "rgba(120,140,170,0.10)"; g.lineWidth = 1;
     g.beginPath();
     for (let x = S.grid; x < S.floor.w; x += S.grid) { const [a,b]=P(x,0); g.moveTo(a,b); g.lineTo(a,b+fh); }
     for (let y = S.grid; y < S.floor.d; y += S.grid) { const [a,b]=P(0,y); g.moveTo(a,b); g.lineTo(a+fw,b); }
@@ -270,60 +502,123 @@ function drawScene(g, scale, ox, oy, w, h) {
   g.strokeStyle = "#3a414b"; g.lineWidth = 2; g.strokeRect(fx,fy,fw,fh);
 
   // items
+  const ed = ui ? editItem() : null;
   for (const it of S.items) {
-    const e = eff(it);
-    const [x,y] = P(it.x - e.w/2, it.y - e.d/2);
-    const iw = e.w*scale, ih = e.d*scale;
-    g.fillStyle = it.color + "55";
-    g.strokeStyle = it.color;
-    g.lineWidth = it.id === selId ? 3 : 1.5;
-    g.fillRect(x,y,iw,ih);
-    g.strokeRect(x,y,iw,ih);
-    if (it.id === selId) {
-      g.strokeStyle = "#ffc400"; g.lineWidth = 1.5;
-      g.setLineDash([5,4]); g.strokeRect(x-4,y-4,iw+8,ih+8); g.setLineDash([]);
-    }
-    const fs = Math.max(9, Math.min(15, iw/6));
-    if (iw > 24 && ih > 14) {
-      g.fillStyle = "#e9ecf0";
-      g.font = `700 ${fs}px -apple-system,'Segoe UI',Roboto,sans-serif`;
-      g.textAlign = "center"; g.textBaseline = "middle";
-      g.fillText(it.name, x+iw/2, y+ih/2, iw-6);
-      if (ih > fs*3) {
-        g.fillStyle = "#8b929c"; g.font = `600 ${fs*0.75}px -apple-system,'Segoe UI',Roboto,sans-serif`;
-        g.fillText(`${fmt(fromCm(it.w,S.unit))}×${fmt(fromCm(it.d,S.unit))}`, x+iw/2, y+ih/2+fs, iw-6);
-      }
+    if (ed && it.id === ed.id) continue;
+    drawItem(g, it, scale, P, { selected: ui && !ed && it.id === selId, dimmed: !!ed });
+  }
+  if (ed) drawItem(g, ed, scale, P, { edit:true });
+  if (!ui) return;
+
+  if (ed) drawEditUI(g, ed);
+  else if (sel()) drawGizmo(g, sel());
+}
+function drawGizmo(g, it) {
+  const [cx,cy] = px(it.x, it.y);
+  const R = gizmoRadius(it);
+  g.save();
+  g.strokeStyle = "rgba(255,196,0,0.45)"; g.lineWidth = 1.5;
+  g.setLineDash([6,5]);
+  g.beginPath(); g.arc(cx,cy,R,0,Math.PI*2); g.stroke();
+  g.setLineDash([]);
+  // 45° ticks
+  g.strokeStyle = "rgba(255,196,0,0.35)";
+  for (let a = 0; a < 360; a += 45) {
+    const r1 = R-4, r2 = R+4, ca = Math.cos((a-90)*RAD), sa = Math.sin((a-90)*RAD);
+    g.beginPath(); g.moveTo(cx+ca*r1, cy+sa*r1); g.lineTo(cx+ca*r2, cy+sa*r2); g.stroke();
+  }
+  // rotate knob
+  const [kx,ky] = knobPos(it);
+  g.beginPath(); g.moveTo(cx,cy); g.lineTo(kx,ky);
+  g.strokeStyle = "rgba(255,196,0,0.5)"; g.stroke();
+  g.beginPath(); g.arc(kx,ky,13,0,Math.PI*2);
+  g.fillStyle = "#ffc400"; g.fill();
+  g.strokeStyle = "#101215"; g.lineWidth = 2; g.stroke();
+  // arrow glyph on knob
+  g.beginPath(); g.arc(kx,ky,6.5,-2.4,1.6);
+  g.strokeStyle = "#101215"; g.lineWidth = 2; g.stroke();
+  const tx = kx + Math.cos(1.6)*6.5, ty = ky + Math.sin(1.6)*6.5;
+  g.beginPath(); g.moveTo(tx-4,ty-1); g.lineTo(tx+2,ty+4); g.lineTo(tx+3,ty-4);
+  g.fillStyle = "#101215"; g.fill();
+  // angle badge
+  g.font = "700 12px -apple-system,'Segoe UI',Roboto,sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "#ffc400";
+  g.fillText(it.rot + "°", kx, ky - 24);
+  g.restore();
+}
+function drawEditUI(g, it) {
+  g.save();
+  for (const h of editHandles(it)) {
+    const [wx,wy] = toWorld(it.x, it.y, it.rot, h.x, h.y);
+    const [hx,hy] = px(wx,wy);
+    const active = partOf(h.part) === editPart;
+    const r = active ? 9 : 7;
+    if (h.kind === "core") {
+      g.fillStyle = "#ffc400"; g.strokeStyle = "#101215"; g.lineWidth = 2;
+      g.fillRect(hx-r, hy-r, r*2, r*2); g.strokeRect(hx-r, hy-r, r*2, r*2);
+    } else {
+      g.beginPath(); g.arc(hx,hy,r+1,0,Math.PI*2);
+      g.fillStyle = "#101215"; g.fill();
+      g.strokeStyle = "#6fb4ff"; g.lineWidth = active ? 3 : 2; g.stroke();
     }
   }
+  g.restore();
 }
 function draw() {
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  drawScene(ctx, view.scale, view.x, view.y, wrap.clientWidth, wrap.clientHeight);
+  drawScene(ctx, view.scale, view.x, view.y, wrap.clientWidth, wrap.clientHeight, true);
 }
 
-/* ============ pointers: drag / pan / pinch ============ */
+/* ============ pointers: tap / drag / rotate / handles / pan / pinch ============ */
 const ptrs = new Map();
-let drag = null;          // {it,dx,dy} moving an item
-let pan  = null;          // {x,y,vx,vy} panning view
-let pinch = null;         // {dist,scale,mx,my}
+let drag  = null;   // {it,dx,dy}          move selected item (overview)
+let pan   = null;   // {x,y,vx,vy}         pan view
+let pinch = null;   // {dist,scale,mx,my,vx,vy}
+let rotG  = null;   // {it}                rotate-gizmo drag
+let hdl   = null;   // {it,part,w0,d0,x0,y0} edit-handle drag
 let moved = false;
+let lastTap = null; // {t,x,y,id}          double-tap detection
 
 cv.addEventListener("pointerdown", ev => {
+  ev.preventDefault();
   cv.setPointerCapture(ev.pointerId);
   ptrs.set(ev.pointerId, { x:ev.offsetX, y:ev.offsetY });
   moved = false;
   if (ptrs.size === 2) {
-    drag = pan = null;
+    if (drag || hdl || rotG) save();
+    drag = pan = rotG = hdl = null;
     const [a,b] = [...ptrs.values()];
     pinch = { dist:Math.hypot(a.x-b.x,a.y-b.y), scale:view.scale,
               mx:(a.x+b.x)/2, my:(a.y+b.y)/2, vx:view.x, vy:view.y };
     return;
   }
-  const [cxp,cyp] = cm(ev.offsetX, ev.offsetY);
+  const sx = ev.offsetX, sy = ev.offsetY;
+  const [cxp,cyp] = cm(sx,sy);
+
+  if (editing()) {
+    const it = editItem();
+    const h = handleAtScreen(it, sx, sy);
+    if (h) {
+      hdl = { it, part:h.part, w0:it.w, d0:it.d, x0:it.x, y0:it.y };
+      setEditPart(partOf(h.part));
+      return;
+    }
+    if (partAt(it, cxp, cyp)) return;           // tap on body: part select on pointerup
+    pan = { x:sx, y:sy, vx:view.x, vy:view.y };
+    return;
+  }
+
+  const s = sel();
+  if (s) {
+    const [kx,ky] = knobPos(s);
+    if (Math.hypot(sx-kx, sy-ky) < 26) { rotG = { it:s }; return; }
+  }
   const it = hit(cxp,cyp);
-  if (it) { drag = { it, dx:it.x-cxp, dy:it.y-cyp }; }
-  else    { pan  = { x:ev.offsetX, y:ev.offsetY, vx:view.x, vy:view.y }; }
+  if (it && it.id === selId) drag = { it, dx:it.x-cxp, dy:it.y-cyp };
+  else pan = { x:sx, y:sy, vx:view.x, vy:view.y };
 });
+
 cv.addEventListener("pointermove", ev => {
   if (!ptrs.has(ev.pointerId)) return;
   const p = ptrs.get(ev.pointerId);
@@ -332,18 +627,29 @@ cv.addEventListener("pointermove", ev => {
   if (pinch && ptrs.size === 2) {
     const [a,b] = [...ptrs.values()];
     const d = Math.hypot(a.x-b.x, a.y-b.y);
-    const k = d / pinch.dist;
-    const ns = Math.min(8, Math.max(0.02, pinch.scale * k));
+    const ns = Math.min(8, Math.max(0.02, pinch.scale * d/pinch.dist));
     const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
     view.x = mx - (pinch.mx - pinch.vx) * (ns/pinch.scale);
     view.y = my - (pinch.my - pinch.vy) * (ns/pinch.scale);
     view.scale = ns;
     draw(); return;
   }
+  if (rotG) {
+    const [cx0,cy0] = px(rotG.it.x, rotG.it.y);
+    const ang = Math.atan2(ev.offsetY-cy0, ev.offsetX-cx0)/RAD + 90;
+    rotG.it.rot = ((Math.round(ang/45)*45) % 360 + 360) % 360;
+    draw(); return;
+  }
+  if (hdl) {
+    const [cxp,cyp] = cm(ev.offsetX, ev.offsetY);
+    applyHandleDrag(hdl, cxp, cyp);
+    syncEditInputs();
+    draw(); return;
+  }
   if (drag) {
     const [cxp,cyp] = cm(ev.offsetX, ev.offsetY);
-    drag.it.x = cxp + drag.dx; drag.it.y = cyp + drag.dy;
-    snapItem(drag.it);
+    drag.it.x = snap(cxp + drag.dx);
+    drag.it.y = snap(cyp + drag.dy);
     draw(); return;
   }
   if (pan) {
@@ -352,21 +658,44 @@ cv.addEventListener("pointermove", ev => {
     draw();
   }
 });
+
+function handleTap(sx, sy) {
+  const [cxp,cyp] = cm(sx,sy);
+  const it = hit(cxp,cyp);
+  const now = performance.now();
+  const dbl = lastTap && (now - lastTap.t) < 400 &&
+              Math.hypot(sx-lastTap.x, sy-lastTap.y) < 36 &&
+              lastTap.id === (it ? it.id : null);
+  lastTap = dbl ? null : { t:now, x:sx, y:sy, id: it ? it.id : null };
+
+  if (editing()) {
+    const ed = editItem();
+    if (it && it.id === ed.id) {
+      const part = partAt(ed, cxp, cyp);
+      if (part) setEditPart(part);
+    } else if (dbl) {
+      exitEdit();
+      if (it) enterEdit(it.id);
+    }
+    return;
+  }
+  if (dbl && it) { enterEdit(it.id); return; }
+  select(it ? it.id : null);
+}
+
 function endPtr(ev) {
+  if (!ptrs.has(ev.pointerId)) return;
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (drag) {
-    if (!moved) select(drag.it.id);
-    else save();
-    drag = null;
-  } else if (pan) {
-    if (!moved) select(null);
-    pan = null;
-  }
+  if (rotG)      { rotG = null; save(); }
+  else if (hdl)  { hdl = null;  save(); }
+  else if (drag) { if (!moved) handleTap(ev.offsetX, ev.offsetY); else save(); drag = null; }
+  else if (pan)  { if (!moved) handleTap(ev.offsetX, ev.offsetY); pan = null; }
+  else if (!moved) handleTap(ev.offsetX, ev.offsetY);
   draw();
 }
 cv.addEventListener("pointerup", endPtr);
-cv.addEventListener("pointercancel", endPtr);
+cv.addEventListener("pointercancel", ev => { ptrs.delete(ev.pointerId); if (ptrs.size<2) pinch=null; drag=pan=rotG=hdl=null; save(); draw(); });
 cv.addEventListener("wheel", ev => {
   ev.preventDefault();
   const k = ev.deltaY < 0 ? 1.12 : 1/1.12;
@@ -376,46 +705,161 @@ cv.addEventListener("wheel", ev => {
   view.scale = ns; draw();
 }, { passive:false });
 
-/* ============ selection panel ============ */
+/* ============ hints ============ */
+const hint = document.getElementById("hint");
+function updateHint() {
+  if (editing()) hint.textContent = "tap a part to select it · drag handles to resize · ✓ DONE to finish";
+  else if (sel()) hint.textContent = "drag body to move · drag knob to rotate (45°) · double-tap to edit";
+  else hint.textContent = "tap item to select · double-tap to edit · drag/pinch to pan & zoom";
+}
+
+/* ============ selection panel (overview) ============ */
 const panel = document.getElementById("panel");
 const pName = document.getElementById("pName");
 const pW = document.getElementById("pW"), pD = document.getElementById("pD");
+const pWLabel = document.getElementById("pWLabel"), pDWrap = document.getElementById("pDWrap");
 const pColor = document.getElementById("pColor");
+const rowOv = document.getElementById("rowOv"), rowEdit = document.getElementById("rowEdit");
 
 function select(id) {
   selId = id;
   const it = sel();
-  panel.classList.toggle("show", !!it);
+  panel.classList.toggle("show", !!it || editing());
   if (it) {
     pName.value = it.name;
+    pColor.value = it.color;
+    pWLabel.textContent = it.shape === "circle" ? "Ø" : "W";
+    pDWrap.style.display = it.shape === "circle" ? "none" : "";
     pW.value = fmt(fromCm(it.w, S.unit));
     pD.value = fmt(fromCm(it.d, S.unit));
-    pColor.value = it.color;
   }
+  updateHint();
   draw();
 }
-pName.addEventListener("input", ()=>{ const it=sel(); if(it){ it.name=pName.value; save(); draw(); }});
-pColor.addEventListener("input", ()=>{ const it=sel(); if(it){ it.color=pColor.value; save(); draw(); }});
+pName.addEventListener("input", ()=>{ const it=editItem()||sel(); if(it){ it.name=pName.value; save(); draw(); }});
+pColor.addEventListener("input", ()=>{ const it=editItem()||sel(); if(it){ it.color=pColor.value; save(); draw(); }});
 function sizeInput() {
   const it = sel(); if (!it) return;
   const w = parseFloat(pW.value), d = parseFloat(pD.value);
   if (w > 0) it.w = toCm(w, S.unit);
-  if (d > 0) it.d = toCm(d, S.unit);
+  if (it.shape === "circle") it.d = it.w;
+  else if (d > 0) it.d = toCm(d, S.unit);
   save(); draw();
 }
 pW.addEventListener("input", sizeInput);
 pD.addEventListener("input", sizeInput);
 document.getElementById("pRot").addEventListener("click", ()=>{
   const it = sel(); if (!it) return;
-  it.rot = (it.rot + 90) % 360; snapItem(it); save(); draw();
+  it.rot = (it.rot + 45) % 360; save(); draw();
 });
 document.getElementById("pDup").addEventListener("click", ()=>{
   const it = sel(); if (!it) return;
-  const c = { ...it, id:Date.now(), x:it.x + eff(it).w/2 + Math.max(S.grid, 30), y:it.y };
-  S.items.push(c); snapItem(c); save(); select(c.id);
+  const off = outerRadius(it) + Math.max(S.grid, 30);
+  const c = normItem({ ...it, clr:{...it.clr}, id:Date.now(), x:it.x + off, y:it.y });
+  S.items.push(c); save(); select(c.id);
 });
 document.getElementById("pDel").addEventListener("click", ()=>{
+  if (editing()) exitEdit();
   S.items = S.items.filter(i=>i.id!==selId); save(); select(null);
+});
+
+/* ============ edit mode ============ */
+const editbar = document.getElementById("editbar");
+const ebRect = document.getElementById("ebRect"), ebCirc = document.getElementById("ebCirc");
+const epLabel = document.getElementById("epLabel"), epHint = document.getElementById("epHint");
+const eA = document.getElementById("eA"), eB = document.getElementById("eB");
+let prevView = null;
+
+function enterEdit(id) {
+  editId = id; editPart = "core";
+  select(id);
+  const it = editItem();
+  prevView = { ...view };
+  const target = Math.min(wrap.clientWidth, wrap.clientHeight) * 0.30;
+  view.scale = Math.min(8, Math.max(view.scale, target / Math.max(outerRadius(it), 40)));
+  view.x = wrap.clientWidth/2  - it.x*view.scale;
+  view.y = wrap.clientHeight/2 - it.y*view.scale;
+  editbar.classList.add("show");
+  rowOv.style.display = "none";
+  rowEdit.style.display = "";
+  panel.classList.add("show");
+  syncShapeButtons(); syncEditInputs(); updateHint(); draw();
+}
+function exitEdit() {
+  const id = editId;
+  editId = null;
+  editbar.classList.remove("show");
+  rowOv.style.display = "";
+  rowEdit.style.display = "none";
+  if (prevView) { view = prevView; prevView = null; }
+  select(id);   // stays selected in overview, refreshes panel fields
+}
+function setEditPart(part) {
+  editPart = part;
+  syncEditInputs();
+  draw();
+}
+function syncShapeButtons() {
+  const it = editItem(); if (!it) return;
+  ebRect.classList.toggle("on", it.shape === "rect");
+  ebCirc.classList.toggle("on", it.shape === "circle");
+}
+const PART_LABEL = { core:"CORE", t:"CLEAR TOP", b:"CLEAR BOTTOM", l:"CLEAR LEFT", r:"CLEAR RIGHT", ring:"CLEAR RING" };
+function syncEditInputs() {
+  const it = editItem(); if (!it) return;
+  epLabel.textContent = PART_LABEL[editPart] || "CORE";
+  epHint.textContent = S.unit;
+  if (editPart === "core") {
+    if (it.shape === "circle") {
+      eB.style.display = "none";
+      eA.value = fmt(fromCm(it.w, S.unit));
+    } else {
+      eB.style.display = "";
+      eA.value = fmt(fromCm(it.w, S.unit));
+      eB.value = fmt(fromCm(it.d, S.unit));
+    }
+  } else {
+    eB.style.display = "none";
+    const v = editPart === "ring" ? it.clrR : it.clr[editPart];
+    eA.value = fmt(fromCm(v, S.unit));
+  }
+}
+function editInput() {
+  const it = editItem(); if (!it) return;
+  const a = parseFloat(eA.value), b = parseFloat(eB.value);
+  if (editPart === "core") {
+    if (a > 0) it.w = toCm(a, S.unit);
+    if (it.shape === "circle") it.d = it.w;
+    else if (b > 0) it.d = toCm(b, S.unit);
+  } else if (editPart === "ring") {
+    if (a >= 0) it.clrR = toCm(a, S.unit);
+  } else if (a >= 0) {
+    it.clr[editPart] = toCm(a, S.unit);
+  }
+  save(); draw();
+}
+eA.addEventListener("input", editInput);
+eB.addEventListener("input", editInput);
+ebRect.addEventListener("click", ()=>{
+  const it = editItem(); if (!it || it.shape === "rect") return;
+  it.shape = "rect"; it.d = it.w;
+  editPart = "core";
+  syncShapeButtons(); syncEditInputs(); save(); draw();
+});
+ebCirc.addEventListener("click", ()=>{
+  const it = editItem(); if (!it || it.shape === "circle") return;
+  it.shape = "circle"; it.w = it.d = Math.round((it.w + it.d)/2);
+  editPart = "core";
+  syncShapeButtons(); syncEditInputs(); save(); draw();
+});
+document.getElementById("ebDone").addEventListener("click", exitEdit);
+
+document.addEventListener("keydown", ev => {
+  if (ev.target && /INPUT|SELECT|TEXTAREA/.test(ev.target.tagName)) return;
+  if (ev.key === "Escape") { if (editing()) exitEdit(); else select(null); }
+  if ((ev.key === "Delete" || ev.key === "Backspace") && sel() && !editing()) {
+    S.items = S.items.filter(i=>i.id!==selId); save(); select(null);
+  }
 });
 
 /* ============ sheets ============ */
@@ -447,9 +891,11 @@ for (const p of PRESETS) {
   b.innerHTML = `<span class="sw" style="background:${p.color}"></span><b>${p.name}</b>
                  <small>${fmt(fromCm(p.w,"m"))}×${fmt(fromCm(p.d,"m"))} m</small>`;
   b.addEventListener("click", ()=>{
-    const it = { id:Date.now(), name:p.name, w:p.w, d:p.d,
-                 x:S.floor.w/2, y:S.floor.d/2, rot:0, color:p.color };
-    snapItem(it); S.items.push(it); save(); closeSheet(); select(it.id);
+    // drop the new item in the middle of the current view
+    const [cxp,cyp] = cm(wrap.clientWidth/2, wrap.clientHeight/2);
+    const it = normItem({ id:Date.now(), name:p.name, w:p.w, d:p.d,
+                          x:snap(cxp), y:snap(cyp), rot:0, color:p.color });
+    S.items.push(it); save(); closeSheet(); select(it.id);
   });
   list.appendChild(b);
 }
@@ -458,20 +904,21 @@ document.getElementById("btnAdd").addEventListener("click", ()=>openSheet("add")
 /* --- floor --- */
 const fUnit = document.getElementById("fUnit");
 const fW = document.getElementById("fW"), fD = document.getElementById("fD");
-const fGrid = document.getElementById("fGrid");
+const fGrid = document.getElementById("fGrid"), fBg = document.getElementById("fBg");
 function floorInfo() {
   document.getElementById("floorInfo").textContent =
-    `${fmt(fromCm(S.floor.w,S.unit))} × ${fmt(fromCm(S.floor.d,S.unit))} ${S.unit}`;
+    `${fmt(fromCm(S.floor.w,S.unit))} × ${fmt(fromCm(S.floor.d,S.unit))} ${S.unit}` +
+    (S.bg ? " · Vån 1" : "");
 }
 document.getElementById("btnFloor").addEventListener("click", ()=>{
   fUnit.value = S.unit;
   fW.value = fmt(fromCm(S.floor.w, S.unit));
   fD.value = fmt(fromCm(S.floor.d, S.unit));
   fGrid.value = fmt(fromCm(S.grid, S.unit));
+  fBg.checked = S.bg;
   openSheet("floor");
 });
 fUnit.addEventListener("change", ()=>{
-  // re-express current field values in the new unit
   const u = fUnit.value;
   fW.value = fmt(fromCm(S.floor.w, u));
   fD.value = fmt(fromCm(S.floor.d, u));
@@ -484,6 +931,7 @@ document.getElementById("fApply").addEventListener("click", ()=>{
   if (w > 0) S.floor.w = toCm(w,u);
   if (d > 0) S.floor.d = toCm(d,u);
   S.grid = g >= 0 ? toCm(g,u) : S.grid;
+  S.bg = fBg.checked;
   save(); floorInfo(); closeSheet(); fitView(); select(selId);
 });
 document.getElementById("fFit").addEventListener("click", ()=>{ closeSheet(); fitView(); });
@@ -506,7 +954,7 @@ document.getElementById("mPng").addEventListener("click", ()=>{
   const oc = document.createElement("canvas");
   oc.width  = Math.round(S.floor.w*scale + pad*2);
   oc.height = Math.round(S.floor.d*scale + pad*2);
-  drawScene(oc.getContext("2d"), scale, pad, pad, oc.width, oc.height);
+  drawScene(oc.getContext("2d"), scale, pad, pad, oc.width, oc.height, false);
   oc.toBlob(b => b && download("shopfloor-layout.png", b), "image/png");
   closeSheet();
 });
@@ -516,13 +964,19 @@ fileIn.addEventListener("change", ()=>{
   const f = fileIn.files[0]; if (!f) return;
   f.text().then(t => {
     const p = JSON.parse(t);
-    if (!p || !p.floor || !Array.isArray(p.items)) throw new Error("bad file");
-    S = p; save(); floorInfo(); closeSheet(); select(null); fitView();
+    if (!p || !Array.isArray(p.items)) throw new Error("bad file");
+    S = { unit:p.unit||"m", floor:p.floor||{ w:BG.w, d:BG.d },
+          grid:+p.grid||0, bg:p.bg!==false, items:p.items.map(normItem) };
+    save(); floorInfo(); closeSheet();
+    editId = null; editbar.classList.remove("show");
+    rowOv.style.display = ""; rowEdit.style.display = "none";
+    select(null); fitView();
   }).catch(()=>alert("Could not read that file."));
   fileIn.value = "";
 });
 document.getElementById("mClear").addEventListener("click", ()=>{
   if (confirm("Remove all items from the layout?")) {
+    if (editing()) exitEdit();
     S.items = []; save(); select(null); closeSheet();
   }
 });
@@ -530,7 +984,7 @@ document.getElementById("mClear").addEventListener("click", ()=>{
 /* ============ boot ============ */
 window.addEventListener("resize", resize);
 new ResizeObserver(resize).observe(wrap);
-floorInfo(); resize(); fitView();
+floorInfo(); updateHint(); resize(); fitView();
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(()=>{});
