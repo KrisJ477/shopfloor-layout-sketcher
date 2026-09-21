@@ -200,6 +200,9 @@
       <span style="font-size:.6rem;color:var(--dim)">show Vån 1 background (bold grid = 5×5 m)</span>
     </div>
     <div class="row">
+      <button class="btn" id="fRotPlan" style="flex:1">⟳ ROTATE PLAN 90°</button>
+    </div>
+    <div class="row">
       <button class="btn acc" id="fApply" style="flex:1">APPLY</button>
       <button class="btn" id="fFit">FIT VIEW</button>
     </div>
@@ -239,6 +242,7 @@ let S = {
   floor:{ w:BG.w, d:BG.d },     // cm
   grid:25,                      // move-snap in cm, 0 = off
   bg:true,
+  bgRot:0,                      // plan rotation: 0/90/180/270
   items:[]
 };
 /* item: {id,name,color,shape:"rect"|"circle",x,y,rot,w,d,clr:{t,r,b,l},clrR}
@@ -266,7 +270,8 @@ function loadState() {
       const p = JSON.parse(raw);
       if (p && p.floor && Array.isArray(p.items)) {
         S = { unit:p.unit||"m", floor:p.floor, grid:+p.grid||0,
-              bg:p.bg!==false, items:p.items.map(normItem) };
+              bg:p.bg!==false, bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
+              items:p.items.map(normItem) };
         // layouts saved against earlier mis-scaled plans (fine grid taken as
         // 3 m, then 1.2 m — it is 1 m): fix the floor, keep items on the same
         // spot of the plan, keep their real-world sizes
@@ -501,7 +506,15 @@ function drawScene(g, scale, ox, oy, w, h, ui) {
   g.fillStyle = "#14171c"; g.fillRect(fx,fy,fw,fh);
   if (S.bg && bgImg.complete && bgImg.naturalWidth) {
     g.imageSmoothingEnabled = true;
-    g.drawImage(bgImg, fx, fy, BG.w*scale, BG.d*scale);
+    const Wp = BG.w*scale, Dp = BG.d*scale, rot = S.bgRot || 0;
+    g.save();
+    g.translate(fx, fy);
+    g.rotate(rot*RAD);
+    if      (rot === 90)  g.drawImage(bgImg, 0,   -Dp, Wp, Dp);
+    else if (rot === 180) g.drawImage(bgImg, -Wp, -Dp, Wp, Dp);
+    else if (rot === 270) g.drawImage(bgImg, -Wp, 0,   Wp, Dp);
+    else                  g.drawImage(bgImg, 0,   0,   Wp, Dp);
+    g.restore();
   }
 
   // snap grid
@@ -948,6 +961,20 @@ document.getElementById("fApply").addEventListener("click", ()=>{
   save(); floorInfo(); closeSheet(); fitView(); select(selId);
 });
 document.getElementById("fFit").addEventListener("click", ()=>{ closeSheet(); fitView(); });
+document.getElementById("fRotPlan").addEventListener("click", ()=>{
+  // rotate the whole world 90° clockwise: plan image, floor, and items
+  const oldD = S.floor.d;
+  S.bgRot = ((S.bgRot || 0) + 90) % 360;
+  [S.floor.w, S.floor.d] = [S.floor.d, S.floor.w];
+  for (const it of S.items) {
+    const { x, y } = it;
+    it.x = oldD - y;
+    it.y = x;
+    it.rot = (it.rot + 90) % 360;
+  }
+  if (editing()) prevView = null;   // old view is meaningless after rotation
+  save(); floorInfo(); closeSheet(); fitView(); select(selId);
+});
 
 /* --- menu: export / import --- */
 document.getElementById("btnMenu").addEventListener("click", ()=>openSheet("menu"));
@@ -979,7 +1006,9 @@ fileIn.addEventListener("change", ()=>{
     const p = JSON.parse(t);
     if (!p || !Array.isArray(p.items)) throw new Error("bad file");
     S = { unit:p.unit||"m", floor:p.floor||{ w:BG.w, d:BG.d },
-          grid:+p.grid||0, bg:p.bg!==false, items:p.items.map(normItem) };
+          grid:+p.grid||0, bg:p.bg!==false,
+          bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
+          items:p.items.map(normItem) };
     save(); floorInfo(); closeSheet();
     editId = null; editbar.classList.remove("show");
     rowOv.style.display = ""; rowEdit.style.display = "none";
