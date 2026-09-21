@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#101215">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<title>Shopfloor Layout Sketcher</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#101215; --panel:#191c21; --line:#262b32;
+    --ink:#e9ecf0; --dim:#8b929c; --faint:#5b626b;
+    --accent:#ffc400; --good:#17c964; --bad:#ff3b30; --cool:#6fb4ff;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { overscroll-behavior:none; }
+  body {
+    margin:0; height:100dvh; overflow:hidden;
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column;
+    padding:max(.4rem,env(safe-area-inset-top)) .55rem max(.4rem,env(safe-area-inset-bottom));
+    gap:.4rem; user-select:none; touch-action:none;
+  }
+
+  /* ---------------- header ---------------- */
+  header { display:flex; align-items:center; gap:.4rem; flex:0 0 auto; }
+  .iconbtn {
+    flex:0 0 auto; width:2.3rem; height:2.3rem; border:0; border-radius:.5rem;
+    background:var(--panel); color:var(--ink); font-size:1.1rem; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .iconbtn:active { background:#232830; }
+  #title {
+    flex:1; min-width:0; font-size:.85rem; font-weight:800;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #title small { display:block; font-size:.6rem; font-weight:600; color:var(--dim); }
+
+  /* ---------------- canvas ---------------- */
+  #wrap { flex:1 1 auto; position:relative; min-height:0;
+          border:1px solid var(--line); border-radius:.9rem; overflow:hidden;
+          background:#0b0d10; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  #hint {
+    position:absolute; left:50%; bottom:.5rem; transform:translateX(-50%);
+    font-size:.65rem; color:var(--faint); pointer-events:none; white-space:nowrap;
+  }
+
+  /* ---------------- selection panel ---------------- */
+  #panel {
+    flex:0 0 auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:.6rem; padding:.45rem .55rem;
+    display:none; flex-direction:column; gap:.4rem;
+  }
+  #panel.show { display:flex; }
+  .row { display:flex; align-items:center; gap:.4rem; }
+  .row label { font-size:.6rem; font-weight:700; color:var(--dim); letter-spacing:.05em; }
+  .row input[type=text] {
+    flex:1; min-width:0; font:inherit; font-size:.85rem; font-weight:700;
+    background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:.45rem; padding:.4rem .5rem;
+  }
+  .row input[type=number] {
+    width:4.6rem; font:inherit; font-size:.85rem; font-weight:700;
+    background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:.45rem; padding:.4rem .4rem; text-align:right;
+  }
+  .row input[type=color] {
+    width:2.3rem; height:2.1rem; border:1px solid var(--line);
+    border-radius:.45rem; background:var(--bg); padding:.15rem;
+  }
+  .btn {
+    border:0; border-radius:.45rem; padding:.5rem .6rem;
+    font:inherit; font-size:.7rem; font-weight:800; letter-spacing:.05em;
+    background:#232830; color:var(--ink);
+  }
+  .btn:active { background:#2c333d; }
+  .btn.warn { background:#2a0d0f; color:var(--bad); }
+  .btn.acc  { background:#2b2213; color:var(--accent); }
+
+  /* ---------------- sheet dialogs ---------------- */
+  #shade {
+    position:fixed; inset:0; background:rgba(0,0,0,.55);
+    display:none; align-items:flex-end; z-index:10;
+  }
+  #shade.show { display:flex; }
+  .sheet {
+    width:100%; background:var(--panel); border-top:1px solid var(--line);
+    border-radius:1rem 1rem 0 0; padding:.8rem .8rem max(.8rem,env(safe-area-inset-bottom));
+    display:none; flex-direction:column; gap:.5rem; max-height:75dvh; overflow-y:auto;
+  }
+  .sheet.show { display:flex; }
+  .sheet h2 { margin:0 0 .2rem; font-size:.8rem; letter-spacing:.06em; color:var(--accent); }
+  .preset {
+    display:flex; align-items:center; gap:.5rem; border:1px solid var(--line);
+    border-radius:.55rem; padding:.55rem .6rem; background:var(--bg);
+    font:inherit; color:var(--ink); text-align:left;
+  }
+  .preset:active { background:#171a1f; }
+  .preset .sw { width:1rem; height:1rem; border-radius:.25rem; flex:0 0 auto; }
+  .preset b { font-size:.8rem; }
+  .preset small { margin-left:auto; color:var(--dim); font-size:.65rem; white-space:nowrap; }
+  select {
+    font:inherit; font-size:.85rem; font-weight:700;
+    background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:.45rem; padding:.45rem .5rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <button class="iconbtn" id="btnAdd" title="Add item">＋</button>
+  <div id="title">Shopfloor Layout Sketcher<small id="floorInfo"></small></div>
+  <button class="iconbtn" id="btnFloor" title="Floor settings">📐</button>
+  <button class="iconbtn" id="btnMenu" title="Export / import">⋯</button>
+</header>
+
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="hint">drag empty space to pan · pinch to zoom · tap an item to select</div>
+</div>
+
+<div id="panel">
+  <div class="row">
+    <input type="text" id="pName" placeholder="Name">
+    <input type="color" id="pColor">
+  </div>
+  <div class="row">
+    <label>W</label><input type="number" id="pW" min="1" step="any">
+    <label>D</label><input type="number" id="pD" min="1" step="any">
+    <span style="flex:1"></span>
+    <button class="btn" id="pRot">⟳ 90°</button>
+    <button class="btn" id="pDup">DUP</button>
+    <button class="btn warn" id="pDel">DEL</button>
+  </div>
+</div>
+
+<div id="shade">
+  <div class="sheet" id="sheetAdd">
+    <h2>ADD ITEM</h2>
+    <div id="presetList"></div>
+  </div>
+  <div class="sheet" id="sheetFloor">
+    <h2>FLOOR</h2>
+    <div class="row">
+      <label>UNIT</label>
+      <select id="fUnit">
+        <option value="m">meters</option>
+        <option value="cm">centimeters</option>
+        <option value="ft">feet</option>
+        <option value="in">inches</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>W</label><input type="number" id="fW" min="1" step="any">
+      <label>D</label><input type="number" id="fD" min="1" step="any">
+    </div>
+    <div class="row">
+      <label>GRID</label><input type="number" id="fGrid" min="0" step="any">
+      <span style="font-size:.6rem;color:var(--dim)">0 = no snap</span>
+    </div>
+    <div class="row">
+      <button class="btn acc" id="fApply" style="flex:1">APPLY</button>
+      <button class="btn" id="fFit">FIT VIEW</button>
+    </div>
+  </div>
+  <div class="sheet" id="sheetMenu">
+    <h2>LAYOUT</h2>
+    <button class="preset" id="mPng"><b>Export PNG</b><small>image snapshot</small></button>
+    <button class="preset" id="mJson"><b>Export JSON</b><small>backup file</small></button>
+    <button class="preset" id="mImport"><b>Import JSON</b><small>restore backup</small></button>
+    <button class="preset" id="mClear"><b style="color:var(--bad)">Clear layout</b><small>remove all items</small></button>
+    <input type="file" id="fileIn" accept=".json,application/json" hidden>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============ units (internal unit: cm) ============ */
+const UNITS = { m:100, cm:1, ft:30.48, in:2.54 };
+const toCm   = (v,u)=>v*UNITS[u];
+const fromCm = (v,u)=>v/UNITS[u];
+const fmt = v => (Math.round(v*100)/100).toString();
+
+/* ============ state ============ */
+const KEY = "sfls-state-v1";
+let S = {
+  unit:"m",
+  floor:{ w:1000, d:800 },      // cm
+  grid:25,                      // cm, 0 = off
+  items:[]                      // {id,name,w,d,x,y,rot,color} — x,y = center, cm
+};
+try {
+  const raw = localStorage.getItem(KEY);
+  if (raw) { const p = JSON.parse(raw); if (p && p.floor && Array.isArray(p.items)) S = p; }
+} catch (e) {}
+let saveT = 0;
+function save() {
+  clearTimeout(saveT);
+  saveT = setTimeout(()=>{ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} }, 250);
+}
+
+/* ============ view transform ============ */
+const wrap = document.getElementById("wrap");
+const cv   = document.getElementById("cv");
+const ctx  = cv.getContext("2d");
+let view = { scale:0.5, x:0, y:0 };   // px per cm, px offset of floor origin
+let dpr = 1;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  cv.width  = Math.round(wrap.clientWidth  * dpr);
+  cv.height = Math.round(wrap.clientHeight * dpr);
+  draw();
+}
+function fitView() {
+  const pad = 24;
+  const sx = (wrap.clientWidth  - pad*2) / S.floor.w;
+  const sy = (wrap.clientHeight - pad*2) / S.floor.d;
+  view.scale = Math.max(0.02, Math.min(sx, sy));
+  view.x = (wrap.clientWidth  - S.floor.w*view.scale)/2;
+  view.y = (wrap.clientHeight - S.floor.d*view.scale)/2;
+  draw();
+}
+const px = (cx,cy)=>[view.x + cx*view.scale, view.y + cy*view.scale];
+const cm = (x,y)=>[(x - view.x)/view.scale, (y - view.y)/view.scale];
+
+/* ============ items ============ */
+let selId = null;
+const sel = ()=>S.items.find(i=>i.id===selId) || null;
+const eff = it => (it.rot % 180) ? { w:it.d, d:it.w } : { w:it.w, d:it.d };
+
+function hit(cxp, cyp) {
+  for (let i = S.items.length-1; i >= 0; i--) {
+    const it = S.items[i], e = eff(it);
+    if (Math.abs(cxp-it.x) <= e.w/2 && Math.abs(cyp-it.y) <= e.d/2) return it;
+  }
+  return null;
+}
+function snap(v) { return S.grid > 0 ? Math.round(v/S.grid)*S.grid : v; }
+function snapItem(it) {
+  const e = eff(it);
+  it.x = snap(it.x - e.w/2) + e.w/2;
+  it.y = snap(it.y - e.d/2) + e.d/2;
+}
+
+/* ============ drawing ============ */
+function drawScene(g, scale, ox, oy, w, h) {
+  g.fillStyle = "#0b0d10"; g.fillRect(0,0,w,h);
+  const P = (x,y)=>[ox + x*scale, oy + y*scale];
+
+  // floor
+  const [fx,fy] = P(0,0);
+  const fw = S.floor.w*scale, fh = S.floor.d*scale;
+  g.fillStyle = "#14171c"; g.fillRect(fx,fy,fw,fh);
+
+  // grid
+  if (S.grid > 0 && S.grid*scale >= 6) {
+    g.strokeStyle = "#1c2027"; g.lineWidth = 1;
+    g.beginPath();
+    for (let x = S.grid; x < S.floor.w; x += S.grid) { const [a,b]=P(x,0); g.moveTo(a,b); g.lineTo(a,b+fh); }
+    for (let y = S.grid; y < S.floor.d; y += S.grid) { const [a,b]=P(0,y); g.moveTo(a,b); g.lineTo(a+fw,b); }
+    g.stroke();
+  }
+  g.strokeStyle = "#3a414b"; g.lineWidth = 2; g.strokeRect(fx,fy,fw,fh);
+
+  // items
+  for (const it of S.items) {
+    const e = eff(it);
+    const [x,y] = P(it.x - e.w/2, it.y - e.d/2);
+    const iw = e.w*scale, ih = e.d*scale;
+    g.fillStyle = it.color + "55";
+    g.strokeStyle = it.color;
+    g.lineWidth = it.id === selId ? 3 : 1.5;
+    g.fillRect(x,y,iw,ih);
+    g.strokeRect(x,y,iw,ih);
+    if (it.id === selId) {
+      g.strokeStyle = "#ffc400"; g.lineWidth = 1.5;
+      g.setLineDash([5,4]); g.strokeRect(x-4,y-4,iw+8,ih+8); g.setLineDash([]);
+    }
+    const fs = Math.max(9, Math.min(15, iw/6));
+    if (iw > 24 && ih > 14) {
+      g.fillStyle = "#e9ecf0";
+      g.font = `700 ${fs}px -apple-system,'Segoe UI',Roboto,sans-serif`;
+      g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(it.name, x+iw/2, y+ih/2, iw-6);
+      if (ih > fs*3) {
+        g.fillStyle = "#8b929c"; g.font = `600 ${fs*0.75}px -apple-system,'Segoe UI',Roboto,sans-serif`;
+        g.fillText(`${fmt(fromCm(it.w,S.unit))}×${fmt(fromCm(it.d,S.unit))}`, x+iw/2, y+ih/2+fs, iw-6);
+      }
+    }
+  }
+}
+function draw() {
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  drawScene(ctx, view.scale, view.x, view.y, wrap.clientWidth, wrap.clientHeight);
+}
+
+/* ============ pointers: drag / pan / pinch ============ */
+const ptrs = new Map();
+let drag = null;          // {it,dx,dy} moving an item
+let pan  = null;          // {x,y,vx,vy} panning view
+let pinch = null;         // {dist,scale,mx,my}
+let moved = false;
+
+cv.addEventListener("pointerdown", ev => {
+  cv.setPointerCapture(ev.pointerId);
+  ptrs.set(ev.pointerId, { x:ev.offsetX, y:ev.offsetY });
+  moved = false;
+  if (ptrs.size === 2) {
+    drag = pan = null;
+    const [a,b] = [...ptrs.values()];
+    pinch = { dist:Math.hypot(a.x-b.x,a.y-b.y), scale:view.scale,
+              mx:(a.x+b.x)/2, my:(a.y+b.y)/2, vx:view.x, vy:view.y };
+    return;
+  }
+  const [cxp,cyp] = cm(ev.offsetX, ev.offsetY);
+  const it = hit(cxp,cyp);
+  if (it) { drag = { it, dx:it.x-cxp, dy:it.y-cyp }; }
+  else    { pan  = { x:ev.offsetX, y:ev.offsetY, vx:view.x, vy:view.y }; }
+});
+cv.addEventListener("pointermove", ev => {
+  if (!ptrs.has(ev.pointerId)) return;
+  const p = ptrs.get(ev.pointerId);
+  if (Math.hypot(ev.offsetX-p.x, ev.offsetY-p.y) > 4) moved = true;
+  p.x = ev.offsetX; p.y = ev.offsetY;
+  if (pinch && ptrs.size === 2) {
+    const [a,b] = [...ptrs.values()];
+    const d = Math.hypot(a.x-b.x, a.y-b.y);
+    const k = d / pinch.dist;
+    const ns = Math.min(8, Math.max(0.02, pinch.scale * k));
+    const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+    view.x = mx - (pinch.mx - pinch.vx) * (ns/pinch.scale);
+    view.y = my - (pinch.my - pinch.vy) * (ns/pinch.scale);
+    view.scale = ns;
+    draw(); return;
+  }
+  if (drag) {
+    const [cxp,cyp] = cm(ev.offsetX, ev.offsetY);
+    drag.it.x = cxp + drag.dx; drag.it.y = cyp + drag.dy;
+    snapItem(drag.it);
+    draw(); return;
+  }
+  if (pan) {
+    view.x = pan.vx + (ev.offsetX - pan.x);
+    view.y = pan.vy + (ev.offsetY - pan.y);
+    draw();
+  }
+});
+function endPtr(ev) {
+  ptrs.delete(ev.pointerId);
+  if (ptrs.size < 2) pinch = null;
+  if (drag) {
+    if (!moved) select(drag.it.id);
+    else save();
+    drag = null;
+  } else if (pan) {
+    if (!moved) select(null);
+    pan = null;
+  }
+  draw();
+}
+cv.addEventListener("pointerup", endPtr);
+cv.addEventListener("pointercancel", endPtr);
+cv.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const k = ev.deltaY < 0 ? 1.12 : 1/1.12;
+  const ns = Math.min(8, Math.max(0.02, view.scale*k));
+  view.x = ev.offsetX - (ev.offsetX - view.x)*(ns/view.scale);
+  view.y = ev.offsetY - (ev.offsetY - view.y)*(ns/view.scale);
+  view.scale = ns; draw();
+}, { passive:false });
+
+/* ============ selection panel ============ */
+const panel = document.getElementById("panel");
+const pName = document.getElementById("pName");
+const pW = document.getElementById("pW"), pD = document.getElementById("pD");
+const pColor = document.getElementById("pColor");
+
+function select(id) {
+  selId = id;
+  const it = sel();
+  panel.classList.toggle("show", !!it);
+  if (it) {
+    pName.value = it.name;
+    pW.value = fmt(fromCm(it.w, S.unit));
+    pD.value = fmt(fromCm(it.d, S.unit));
+    pColor.value = it.color;
+  }
+  draw();
+}
+pName.addEventListener("input", ()=>{ const it=sel(); if(it){ it.name=pName.value; save(); draw(); }});
+pColor.addEventListener("input", ()=>{ const it=sel(); if(it){ it.color=pColor.value; save(); draw(); }});
+function sizeInput() {
+  const it = sel(); if (!it) return;
+  const w = parseFloat(pW.value), d = parseFloat(pD.value);
+  if (w > 0) it.w = toCm(w, S.unit);
+  if (d > 0) it.d = toCm(d, S.unit);
+  save(); draw();
+}
+pW.addEventListener("input", sizeInput);
+pD.addEventListener("input", sizeInput);
+document.getElementById("pRot").addEventListener("click", ()=>{
+  const it = sel(); if (!it) return;
+  it.rot = (it.rot + 90) % 360; snapItem(it); save(); draw();
+});
+document.getElementById("pDup").addEventListener("click", ()=>{
+  const it = sel(); if (!it) return;
+  const c = { ...it, id:Date.now(), x:it.x + eff(it).w/2 + Math.max(S.grid, 30), y:it.y };
+  S.items.push(c); snapItem(c); save(); select(c.id);
+});
+document.getElementById("pDel").addEventListener("click", ()=>{
+  S.items = S.items.filter(i=>i.id!==selId); save(); select(null);
+});
+
+/* ============ sheets ============ */
+const shade = document.getElementById("shade");
+const sheets = { add:document.getElementById("sheetAdd"),
+                 floor:document.getElementById("sheetFloor"),
+                 menu:document.getElementById("sheetMenu") };
+function openSheet(n) {
+  shade.classList.add("show");
+  for (const k in sheets) sheets[k].classList.toggle("show", k===n);
+}
+function closeSheet() { shade.classList.remove("show"); }
+shade.addEventListener("click", ev => { if (ev.target === shade) closeSheet(); });
+
+/* --- add item --- */
+const PRESETS = [
+  { name:"Workbench",  w:180, d:75,  color:"#6fb4ff" },
+  { name:"Machine",    w:120, d:120, color:"#ffc400" },
+  { name:"Table saw",  w:100, d:80,  color:"#ff8a5c" },
+  { name:"Shelf",      w:120, d:45,  color:"#17c964" },
+  { name:"Pallet",     w:120, d:80,  color:"#b48cff" },
+  { name:"Cabinet",    w:90,  d:60,  color:"#ff5ca8" },
+  { name:"Custom",     w:100, d:100, color:"#8b929c" },
+];
+const list = document.getElementById("presetList");
+for (const p of PRESETS) {
+  const b = document.createElement("button");
+  b.className = "preset";
+  b.innerHTML = `<span class="sw" style="background:${p.color}"></span><b>${p.name}</b>
+                 <small>${fmt(fromCm(p.w,"m"))}×${fmt(fromCm(p.d,"m"))} m</small>`;
+  b.addEventListener("click", ()=>{
+    const it = { id:Date.now(), name:p.name, w:p.w, d:p.d,
+                 x:S.floor.w/2, y:S.floor.d/2, rot:0, color:p.color };
+    snapItem(it); S.items.push(it); save(); closeSheet(); select(it.id);
+  });
+  list.appendChild(b);
+}
+document.getElementById("btnAdd").addEventListener("click", ()=>openSheet("add"));
+
+/* --- floor --- */
+const fUnit = document.getElementById("fUnit");
+const fW = document.getElementById("fW"), fD = document.getElementById("fD");
+const fGrid = document.getElementById("fGrid");
+function floorInfo() {
+  document.getElementById("floorInfo").textContent =
+    `${fmt(fromCm(S.floor.w,S.unit))} × ${fmt(fromCm(S.floor.d,S.unit))} ${S.unit}`;
+}
+document.getElementById("btnFloor").addEventListener("click", ()=>{
+  fUnit.value = S.unit;
+  fW.value = fmt(fromCm(S.floor.w, S.unit));
+  fD.value = fmt(fromCm(S.floor.d, S.unit));
+  fGrid.value = fmt(fromCm(S.grid, S.unit));
+  openSheet("floor");
+});
+fUnit.addEventListener("change", ()=>{
+  // re-express current field values in the new unit
+  const u = fUnit.value;
+  fW.value = fmt(fromCm(S.floor.w, u));
+  fD.value = fmt(fromCm(S.floor.d, u));
+  fGrid.value = fmt(fromCm(S.grid, u));
+});
+document.getElementById("fApply").addEventListener("click", ()=>{
+  const u = fUnit.value;
+  const w = parseFloat(fW.value), d = parseFloat(fD.value), g = parseFloat(fGrid.value);
+  S.unit = u;
+  if (w > 0) S.floor.w = toCm(w,u);
+  if (d > 0) S.floor.d = toCm(d,u);
+  S.grid = g >= 0 ? toCm(g,u) : S.grid;
+  save(); floorInfo(); closeSheet(); fitView(); select(selId);
+});
+document.getElementById("fFit").addEventListener("click", ()=>{ closeSheet(); fitView(); });
+
+/* --- menu: export / import --- */
+document.getElementById("btnMenu").addEventListener("click", ()=>openSheet("menu"));
+function download(name, blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+}
+document.getElementById("mJson").addEventListener("click", ()=>{
+  download("shopfloor-layout.json",
+    new Blob([JSON.stringify(S,null,2)], { type:"application/json" }));
+  closeSheet();
+});
+document.getElementById("mPng").addEventListener("click", ()=>{
+  const scale = Math.min(4, 1600/Math.max(S.floor.w,S.floor.d));
+  const pad = 20;
+  const oc = document.createElement("canvas");
+  oc.width  = Math.round(S.floor.w*scale + pad*2);
+  oc.height = Math.round(S.floor.d*scale + pad*2);
+  drawScene(oc.getContext("2d"), scale, pad, pad, oc.width, oc.height);
+  oc.toBlob(b => b && download("shopfloor-layout.png", b), "image/png");
+  closeSheet();
+});
+const fileIn = document.getElementById("fileIn");
+document.getElementById("mImport").addEventListener("click", ()=>fileIn.click());
+fileIn.addEventListener("change", ()=>{
+  const f = fileIn.files[0]; if (!f) return;
+  f.text().then(t => {
+    const p = JSON.parse(t);
+    if (!p || !p.floor || !Array.isArray(p.items)) throw new Error("bad file");
+    S = p; save(); floorInfo(); closeSheet(); select(null); fitView();
+  }).catch(()=>alert("Could not read that file."));
+  fileIn.value = "";
+});
+document.getElementById("mClear").addEventListener("click", ()=>{
+  if (confirm("Remove all items from the layout?")) {
+    S.items = []; save(); select(null); closeSheet();
+  }
+});
+
+/* ============ boot ============ */
+window.addEventListener("resize", resize);
+new ResizeObserver(resize).observe(wrap);
+floorInfo(); resize(); fitView();
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(()=>{});
+}
+</script>
+</body>
+</html>
