@@ -197,7 +197,7 @@
     </div>
     <div class="row">
       <label>PLAN</label><input type="checkbox" id="fBg">
-      <span style="font-size:.6rem;color:var(--dim)">show Vån 1 background (bold grid = 6×6 m)</span>
+      <span style="font-size:.6rem;color:var(--dim)">show Vån 1 background (bold grid = 5×5 m)</span>
     </div>
     <div class="row">
       <button class="btn acc" id="fApply" style="flex:1">APPLY</button>
@@ -223,10 +223,10 @@ const fromCm = (v,u)=>v/UNITS[u];
 const fmt = v => (Math.round(v*100)/100).toString();
 const RAD = Math.PI/180;
 
-/* ============ background plan (Vån 1, bold grid squares = 6 m) ============ */
-// 540×807 px @ 5.6845 cm/px (major grid lines 105.55 px apart = 6 m;
-// sanity-checked: doors ≈ 0.97 m, toilets ≈ 0.68 m, stair treads ≈ 28 cm)
-const BG = { src:"./floorplan.png", w:3070, d:4587 };
+/* ============ background plan (Vån 1, bold grid squares = 5 m) ============ */
+// 540×807 px @ 4.7371 cm/px (major grid lines 105.55 px apart = 5 m,
+// fine grid 21.11 px = 1 m)
+const BG = { src:"./floorplan.png", w:2558, d:3823 };
 const bgImg = new Image();
 bgImg.src = BG.src;
 bgImg.onload = ()=>draw();
@@ -267,12 +267,16 @@ function loadState() {
       if (p && p.floor && Array.isArray(p.items)) {
         S = { unit:p.unit||"m", floor:p.floor, grid:+p.grid||0,
               bg:p.bg!==false, items:p.items.map(normItem) };
-        // layouts saved against the mis-scaled plan (fine grid taken as 3 m
-        // instead of 1.2 m): fix the floor and keep items on the same spot
-        if (Math.round(S.floor.w) === 7675 && Math.round(S.floor.d) === 11470) {
-          const k = BG.w/7675;
-          S.floor = { w:BG.w, d:BG.d };
-          for (const it of S.items) { it.x *= k; it.y *= k; }
+        // layouts saved against earlier mis-scaled plans (fine grid taken as
+        // 3 m, then 1.2 m — it is 1 m): fix the floor, keep items on the same
+        // spot of the plan, keep their real-world sizes
+        for (const [ow,od] of [[7675,11470],[3070,4587]]) {
+          if (Math.round(S.floor.w) === ow && Math.round(S.floor.d) === od) {
+            const k = BG.w/ow;
+            S.floor = { w:BG.w, d:BG.d };
+            for (const it of S.items) { it.x *= k; it.y *= k; }
+            break;
+          }
         }
         return;
       }
