@@ -57,6 +57,21 @@
     border-radius:.6rem; padding:.3rem .35rem;
   }
   #editbar.show { display:flex; }
+  #scalebar {
+    position:absolute; top:.5rem; left:50%; transform:translateX(-50%);
+    display:none; align-items:center; gap:.35rem; z-index:5;
+    background:rgba(25,28,33,.94); border:1px solid var(--line);
+    border-radius:.6rem; padding:.3rem .45rem; max-width:96%;
+  }
+  #scalebar.show { display:flex; }
+  #scalebar label { font-size:.6rem; font-weight:700; color:var(--dim); letter-spacing:.05em; }
+  #scalebar .u { font-size:.65rem; color:var(--dim); }
+  #scalebar input {
+    width:3.6rem; font:inherit; font-size:.85rem; font-weight:700;
+    background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:.45rem; padding:.35rem .4rem; text-align:right;
+  }
+  #scalebar #scOut { font-size:.7rem; font-weight:800; color:var(--accent); white-space:nowrap; }
   #editbar .seg {
     border:1px solid var(--line); border-radius:.45rem; padding:.4rem .6rem;
     font:inherit; font-size:.7rem; font-weight:800; letter-spacing:.04em;
@@ -147,6 +162,14 @@
     <button class="seg" id="ebCirc">◯ CIRCLE</button>
     <button class="done" id="ebDone">✓ DONE</button>
   </div>
+  <div id="scalebar">
+    <label>GRID □</label>
+    <input type="number" id="scGrid" min="0.1" step="any">
+    <span class="u">m</span>
+    <span id="scOut"></span>
+    <button class="done" id="scApply">APPLY</button>
+    <button class="seg" id="scCancel">✕</button>
+  </div>
   <div id="hint"></div>
 </div>
 
@@ -201,6 +224,7 @@
     </div>
     <div class="row">
       <button class="btn" id="fRotPlan" style="flex:1">⟳ ROTATE PLAN 90°</button>
+      <button class="btn" id="fScale" style="flex:1">📏 CALIBRATE SCALE</button>
     </div>
     <div class="row">
       <button class="btn acc" id="fApply" style="flex:1">APPLY</button>
@@ -226,12 +250,15 @@ const fromCm = (v,u)=>v/UNITS[u];
 const fmt = v => (Math.round(v*100)/100).toString();
 const RAD = Math.PI/180;
 
-/* ============ background plan (Vån 1, bold grid squares = 5 m) ============ */
-// 540×807 px @ 4.7371 cm/px (major grid lines 105.55 px apart = 5 m,
-// fine grid 21.11 px = 1 m)
-const BG = { src:"./floorplan.png", w:2558, d:3823 };
+/* ============ background plan (Vån 1) ============ */
+// image is 540×807 px with major grid lines every 105.55 px; the scale
+// (cm per image px) is adjustable via calibration — default: bold grid = 5 m
+const IMG = { src:"./floorplan.png", w:540, h:807, gridPx:105.55 };
+const DEF_SCALE = 500/IMG.gridPx;              // 4.7371 cm per image px
+const planW = ()=>IMG.w*S.scale;               // plan size in cm (unrotated)
+const planD = ()=>IMG.h*S.scale;
 const bgImg = new Image();
-bgImg.src = BG.src;
+bgImg.src = IMG.src;
 bgImg.onload = ()=>draw();
 
 /* ============ state ============ */
@@ -239,7 +266,8 @@ const KEY  = "sfls-state-v2";
 const KEY1 = "sfls-state-v1";
 let S = {
   unit:"m",
-  floor:{ w:BG.w, d:BG.d },     // cm
+  scale:DEF_SCALE,              // cm per plan-image px
+  floor:{ w:Math.round(IMG.w*DEF_SCALE), d:Math.round(IMG.h*DEF_SCALE) }, // cm
   grid:25,                      // move-snap in cm, 0 = off
   bg:true,
   bgRot:0,                      // plan rotation: 0/90/180/270
@@ -263,28 +291,32 @@ function normItem(it) {
     clrR: Math.max(0, +it.clrR || 0),
   };
 }
+function hydrate(p) {           // build state from a saved/imported object
+  S = { unit:p.unit||"m",
+        scale:+p.scale > 0 ? +p.scale : DEF_SCALE,
+        floor:null,
+        grid:+p.grid||0,
+        bg:p.bg!==false, bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
+        items:p.items.map(normItem) };
+  S.floor = p.floor || { w:Math.round(planW()), d:Math.round(planD()) };
+  // layouts saved against earlier mis-scaled plans (fine grid taken as
+  // 3 m, then 1.2 m — it is 1 m by default): fix the floor, keep items on
+  // the same spot of the plan, keep their real-world sizes
+  for (const [ow,od] of [[7675,11470],[3070,4587]]) {
+    if (Math.round(S.floor.w) === ow && Math.round(S.floor.d) === od) {
+      const k = planW()/ow;
+      S.floor = { w:Math.round(planW()), d:Math.round(planD()) };
+      for (const it of S.items) { it.x *= k; it.y *= k; }
+      break;
+    }
+  }
+}
 function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const p = JSON.parse(raw);
-      if (p && p.floor && Array.isArray(p.items)) {
-        S = { unit:p.unit||"m", floor:p.floor, grid:+p.grid||0,
-              bg:p.bg!==false, bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
-              items:p.items.map(normItem) };
-        // layouts saved against earlier mis-scaled plans (fine grid taken as
-        // 3 m, then 1.2 m — it is 1 m): fix the floor, keep items on the same
-        // spot of the plan, keep their real-world sizes
-        for (const [ow,od] of [[7675,11470],[3070,4587]]) {
-          if (Math.round(S.floor.w) === ow && Math.round(S.floor.d) === od) {
-            const k = BG.w/ow;
-            S.floor = { w:BG.w, d:BG.d };
-            for (const it of S.items) { it.x *= k; it.y *= k; }
-            break;
-          }
-        }
-        return;
-      }
+      if (p && p.floor && Array.isArray(p.items)) { hydrate(p); return; }
     }
     const raw1 = localStorage.getItem(KEY1);      // migrate old layouts onto the plan
     if (raw1) {
@@ -506,7 +538,7 @@ function drawScene(g, scale, ox, oy, w, h, ui) {
   g.fillStyle = "#14171c"; g.fillRect(fx,fy,fw,fh);
   if (S.bg && bgImg.complete && bgImg.naturalWidth) {
     g.imageSmoothingEnabled = true;
-    const Wp = BG.w*scale, Dp = BG.d*scale, rot = S.bgRot || 0;
+    const Wp = planW()*scale, Dp = planD()*scale, rot = S.bgRot || 0;
     g.save();
     g.translate(fx, fy);
     g.rotate(rot*RAD);
@@ -537,7 +569,31 @@ function drawScene(g, scale, ox, oy, w, h, ui) {
   if (!ui) return;
 
   if (ed) drawEditUI(g, ed);
-  else if (sel()) drawGizmo(g, sel());
+  else if (!scaleMode && sel()) drawGizmo(g, sel());
+  if (scaleMode && ruler) drawRuler(g);
+}
+function drawRuler(g) {
+  const [ax,ay] = px(ruler.x1, ruler.y1), [bx,by] = px(ruler.x2, ruler.y2);
+  g.save();
+  g.strokeStyle = "#ffc400"; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(ax,ay); g.lineTo(bx,by); g.stroke();
+  for (const [x,y] of [[ax,ay],[bx,by]]) {
+    g.beginPath(); g.arc(x,y,5,0,Math.PI*2);
+    g.fillStyle = "#ffc400"; g.fill();
+    g.strokeStyle = "#101215"; g.lineWidth = 1.5; g.stroke();
+  }
+  // length under the CANDIDATE scale from the input, so the user can try
+  // values and see what a known feature would measure before applying
+  const Lcm = Math.hypot(ruler.x2-ruler.x1, ruler.y2-ruler.y1) / S.scale * candScale();
+  const label = `${fmt(fromCm(Lcm, S.unit))} ${S.unit}`;
+  const mx = (ax+bx)/2, my = (ay+by)/2 - 16;
+  g.font = "800 13px -apple-system,'Segoe UI',Roboto,sans-serif";
+  const tw = g.measureText(label).width;
+  g.fillStyle = "rgba(16,18,21,.85)";
+  g.fillRect(mx-tw/2-6, my-11, tw+12, 20);
+  g.fillStyle = "#ffc400"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(label, mx, my);
+  g.restore();
 }
 function drawGizmo(g, it) {
   const [cx,cy] = px(it.x, it.y);
@@ -605,6 +661,9 @@ let rotG  = null;   // {it}                rotate-gizmo drag
 let hdl   = null;   // {it,part,w0,d0,x0,y0} edit-handle drag
 let moved = false;
 let lastTap = null; // {t,x,y,id}          double-tap detection
+let scaleMode = false;
+let ruler = null;   // {x1,y1,x2,y2} cm    measuring line in scale mode
+let measuring = false;
 
 cv.addEventListener("pointerdown", ev => {
   ev.preventDefault();
@@ -613,7 +672,7 @@ cv.addEventListener("pointerdown", ev => {
   moved = false;
   if (ptrs.size === 2) {
     if (drag || hdl || rotG) save();
-    drag = pan = rotG = hdl = null;
+    drag = pan = rotG = hdl = null; measuring = false;
     const [a,b] = [...ptrs.values()];
     pinch = { dist:Math.hypot(a.x-b.x,a.y-b.y), scale:view.scale,
               mx:(a.x+b.x)/2, my:(a.y+b.y)/2, vx:view.x, vy:view.y };
@@ -621,6 +680,13 @@ cv.addEventListener("pointerdown", ev => {
   }
   const sx = ev.offsetX, sy = ev.offsetY;
   const [cxp,cyp] = cm(sx,sy);
+
+  if (scaleMode) {
+    ruler = { x1:cxp, y1:cyp, x2:cxp, y2:cyp };
+    measuring = true;
+    draw();
+    return;
+  }
 
   if (editing()) {
     const it = editItem();
@@ -658,6 +724,10 @@ cv.addEventListener("pointermove", ev => {
     view.x = mx - (pinch.mx - pinch.vx) * (ns/pinch.scale);
     view.y = my - (pinch.my - pinch.vy) * (ns/pinch.scale);
     view.scale = ns;
+    draw(); return;
+  }
+  if (measuring && ruler) {
+    [ruler.x2, ruler.y2] = cm(ev.offsetX, ev.offsetY);
     draw(); return;
   }
   if (rotG) {
@@ -713,7 +783,8 @@ function endPtr(ev) {
   if (!ptrs.has(ev.pointerId)) return;
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (rotG)      { rotG = null; save(); }
+  if (measuring) { measuring = false; }
+  else if (rotG) { rotG = null; save(); }
   else if (hdl)  { hdl = null;  save(); }
   else if (drag) { if (!moved) handleTap(ev.offsetX, ev.offsetY); else save(); drag = null; }
   else if (pan)  { if (!moved) handleTap(ev.offsetX, ev.offsetY); pan = null; }
@@ -721,7 +792,7 @@ function endPtr(ev) {
   draw();
 }
 cv.addEventListener("pointerup", endPtr);
-cv.addEventListener("pointercancel", ev => { ptrs.delete(ev.pointerId); if (ptrs.size<2) pinch=null; drag=pan=rotG=hdl=null; save(); draw(); });
+cv.addEventListener("pointercancel", ev => { ptrs.delete(ev.pointerId); if (ptrs.size<2) pinch=null; drag=pan=rotG=hdl=null; measuring=false; save(); draw(); });
 cv.addEventListener("wheel", ev => {
   ev.preventDefault();
   const k = ev.deltaY < 0 ? 1.12 : 1/1.12;
@@ -734,7 +805,8 @@ cv.addEventListener("wheel", ev => {
 /* ============ hints ============ */
 const hint = document.getElementById("hint");
 function updateHint() {
-  if (editing()) hint.textContent = "tap a part to select it · drag handles to resize · ✓ DONE to finish";
+  if (scaleMode) hint.textContent = "drag on the plan to measure · adjust grid size until known features check out · APPLY";
+  else if (editing()) hint.textContent = "tap a part to select it · drag handles to resize · ✓ DONE to finish";
   else if (sel()) hint.textContent = "drag body to move · drag knob to rotate (45°) · double-tap to edit";
   else hint.textContent = "tap item to select · double-tap to edit · drag/pinch to pan & zoom";
 }
@@ -880,9 +952,48 @@ ebCirc.addEventListener("click", ()=>{
 });
 document.getElementById("ebDone").addEventListener("click", exitEdit);
 
+/* ============ scale calibration mode ============ */
+const scalebar = document.getElementById("scalebar");
+const scGrid = document.getElementById("scGrid"), scOut = document.getElementById("scOut");
+function candScale() {           // cm per image px from the input's grid size
+  const g = parseFloat(scGrid.value);
+  return g > 0 ? g*100/IMG.gridPx : S.scale;
+}
+function updateScaleOut() {
+  const k = candScale()/S.scale;
+  scOut.textContent =
+    `→ ${fmt(fromCm(S.floor.w*k, S.unit))} × ${fmt(fromCm(S.floor.d*k, S.unit))} ${S.unit}`;
+}
+function enterScale() {
+  if (editing()) exitEdit();
+  select(null);
+  scaleMode = true; ruler = null;
+  scGrid.value = fmt(S.scale*IMG.gridPx/100);
+  scalebar.classList.add("show");
+  updateScaleOut(); updateHint(); draw();
+}
+function exitScale() {
+  scaleMode = false; ruler = null; measuring = false;
+  scalebar.classList.remove("show");
+  updateHint(); draw();
+}
+scGrid.addEventListener("input", ()=>{ updateScaleOut(); draw(); });
+document.getElementById("scApply").addEventListener("click", ()=>{
+  const k = candScale()/S.scale;
+  if (k > 0 && isFinite(k)) {
+    S.scale = candScale();
+    S.floor.w *= k; S.floor.d *= k;
+    for (const it of S.items) { it.x *= k; it.y *= k; }  // stay on the plan spot
+    save(); floorInfo(); fitView();
+  }
+  exitScale();
+});
+document.getElementById("scCancel").addEventListener("click", exitScale);
+document.getElementById("fScale").addEventListener("click", ()=>{ closeSheet(); enterScale(); });
+
 document.addEventListener("keydown", ev => {
   if (ev.target && /INPUT|SELECT|TEXTAREA/.test(ev.target.tagName)) return;
-  if (ev.key === "Escape") { if (editing()) exitEdit(); else select(null); }
+  if (ev.key === "Escape") { if (scaleMode) exitScale(); else if (editing()) exitEdit(); else select(null); }
   if ((ev.key === "Delete" || ev.key === "Backspace") && sel() && !editing()) {
     S.items = S.items.filter(i=>i.id!==selId); save(); select(null);
   }
@@ -978,10 +1089,27 @@ document.getElementById("fRotPlan").addEventListener("click", ()=>{
 
 /* --- menu: export / import --- */
 document.getElementById("btnMenu").addEventListener("click", ()=>openSheet("menu"));
-function download(name, blob) {
+async function download(name, blob) {
+  // On touch devices (iPad/phone, incl. installed PWAs where plain anchor
+  // downloads often do nothing) offer the native share sheet: user can save
+  // to Files, AirDrop, mail, etc. Desktop keeps the normal download.
+  const coarse = matchMedia("(pointer:coarse)").matches;
+  if (coarse && navigator.canShare) {
+    try {
+      const file = new File([blob], name, { type: blob.type });
+      if (navigator.canShare({ files:[file] })) {
+        await navigator.share({ files:[file], title:name });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;   // user closed the sheet
+      // fall through to anchor download
+    }
+  }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = name;
-  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
 }
 document.getElementById("mJson").addEventListener("click", ()=>{
   download("shopfloor-layout.json",
@@ -1005,13 +1133,11 @@ fileIn.addEventListener("change", ()=>{
   f.text().then(t => {
     const p = JSON.parse(t);
     if (!p || !Array.isArray(p.items)) throw new Error("bad file");
-    S = { unit:p.unit||"m", floor:p.floor||{ w:BG.w, d:BG.d },
-          grid:+p.grid||0, bg:p.bg!==false,
-          bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
-          items:p.items.map(normItem) };
+    hydrate(p);
     save(); floorInfo(); closeSheet();
     editId = null; editbar.classList.remove("show");
     rowOv.style.display = ""; rowEdit.style.display = "none";
+    if (scaleMode) exitScale();
     select(null); fitView();
   }).catch(()=>alert("Could not read that file."));
   fileIn.value = "";

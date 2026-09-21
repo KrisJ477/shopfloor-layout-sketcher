@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "sfls-v6";
+const CACHE = "sfls-v7";
 const ASSETS = [
   "./",
   "./index.html",
