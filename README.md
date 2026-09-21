@@ -9,9 +9,10 @@ fully offline once loaded.
 
 ## Features
 
-- **Floor plan background** — the Vån 1 plan (`floorplan.png`) is drawn to scale
-  under the layout (its bold grid squares are 5×5 m, fine grid 1×1 m,
-  floor ≈ 25.6×38.2 m); toggle it in floor settings
+- **Floor plan backgrounds** — pick a plan from the ⋯ menu: Hulda Lindgren 4
+  (`floorplan.png`, bold grid 5×5 m) or Argongatan 8
+  (`floorplan-argongatan.png`, calibrated from its printed scale bar,
+  974 kvm rentable); each plan remembers its own calibration
 - **Select to move** — items only move while selected; tap to select, then drag
 - **Rotate gizmo** — a selected item shows a rotation knob that snaps to 45° steps
 - **Double-tap to edit** — edit mode per item: switch the core between rectangle

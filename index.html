@@ -163,7 +163,7 @@
     <button class="done" id="ebDone">✓ DONE</button>
   </div>
   <div id="scalebar">
-    <label>GRID □</label>
+    <label id="scLabel">GRID □</label>
     <input type="number" id="scGrid" min="0.1" step="any">
     <span class="u">m</span>
     <span id="scOut"></span>
@@ -232,6 +232,8 @@
     </div>
   </div>
   <div class="sheet" id="sheetMenu">
+    <h2>FLOOR PLAN</h2>
+    <div id="planList"></div>
     <h2>LAYOUT</h2>
     <button class="preset" id="mPng"><b>Export PNG</b><small>image snapshot</small></button>
     <button class="preset" id="mJson"><b>Export JSON</b><small>backup file</small></button>
@@ -250,24 +252,43 @@ const fromCm = (v,u)=>v/UNITS[u];
 const fmt = v => (Math.round(v*100)/100).toString();
 const RAD = Math.PI/180;
 
-/* ============ background plan (Vån 1) ============ */
-// image is 540×807 px with major grid lines every 105.55 px; the scale
-// (cm per image px) is adjustable via calibration — default: bold grid = 5 m
-const IMG = { src:"./floorplan.png", w:540, h:807, gridPx:105.55 };
-const DEF_SCALE = 500/IMG.gridPx;              // 4.7371 cm per image px
-const planW = ()=>IMG.w*S.scale;               // plan size in cm (unrotated)
-const planD = ()=>IMG.h*S.scale;
-const bgImg = new Image();
-bgImg.src = IMG.src;
-bgImg.onload = ()=>draw();
+/* ============ background plans ============ */
+// scale = cm per image px, adjustable via calibration.
+// hulda: CAD sheet, bold grid lines every 105.55 px, default 5 m per square.
+// argon: from the Balder PDF at 150 dpi; its printed scale bar gives
+//        30.1 px/m, which also puts the rentable area at ~982 m² vs the
+//        stated 974 kvm (0.8% off), so the bar is trusted as-is.
+const PLANS = {
+  hulda: { name:"Hulda Lindgren 4", src:"./floorplan.png",
+           w:540, h:807, gridPx:105.55, defScale:500/105.55 },
+  argon: { name:"Argongatan 8", src:"./floorplan-argongatan.png",
+           w:973, h:1058, gridPx:0, defScale:100/30.1 },
+};
+const curPlan = ()=>PLANS[S.plan] || PLANS.hulda;
+const planW = ()=>curPlan().w*S.scale;         // plan size in cm (unrotated)
+const planD = ()=>curPlan().h*S.scale;
+const bgImgs = {};
+function bgImg() {
+  const src = curPlan().src;
+  if (!bgImgs[src]) {
+    const img = new Image();
+    img.src = src;
+    img.onload = ()=>draw();
+    bgImgs[src] = img;
+  }
+  return bgImgs[src];
+}
 
 /* ============ state ============ */
 const KEY  = "sfls-state-v2";
 const KEY1 = "sfls-state-v1";
 let S = {
   unit:"m",
-  scale:DEF_SCALE,              // cm per plan-image px
-  floor:{ w:Math.round(IMG.w*DEF_SCALE), d:Math.round(IMG.h*DEF_SCALE) }, // cm
+  plan:"hulda",
+  scale:PLANS.hulda.defScale,   // cm per plan-image px (current plan)
+  planScales:{},                // remembered calibrations per plan
+  floor:{ w:Math.round(PLANS.hulda.w*PLANS.hulda.defScale),
+          d:Math.round(PLANS.hulda.h*PLANS.hulda.defScale) },            // cm
   grid:25,                      // move-snap in cm, 0 = off
   bg:true,
   bgRot:0,                      // plan rotation: 0/90/180/270
@@ -292,8 +313,11 @@ function normItem(it) {
   };
 }
 function hydrate(p) {           // build state from a saved/imported object
+  const plan = PLANS[p.plan] ? p.plan : "hulda";
   S = { unit:p.unit||"m",
-        scale:+p.scale > 0 ? +p.scale : DEF_SCALE,
+        plan,
+        scale:+p.scale > 0 ? +p.scale : PLANS[plan].defScale,
+        planScales:(p.planScales && typeof p.planScales === "object") ? p.planScales : {},
         floor:null,
         grid:+p.grid||0,
         bg:p.bg!==false, bgRot:[0,90,180,270].includes(p.bgRot)?p.bgRot:0,
@@ -536,16 +560,17 @@ function drawScene(g, scale, ox, oy, w, h, ui) {
   const [fx,fy] = P(0,0);
   const fw = S.floor.w*scale, fh = S.floor.d*scale;
   g.fillStyle = "#14171c"; g.fillRect(fx,fy,fw,fh);
-  if (S.bg && bgImg.complete && bgImg.naturalWidth) {
+  const img = bgImg();
+  if (S.bg && img.complete && img.naturalWidth) {
     g.imageSmoothingEnabled = true;
     const Wp = planW()*scale, Dp = planD()*scale, rot = S.bgRot || 0;
     g.save();
     g.translate(fx, fy);
     g.rotate(rot*RAD);
-    if      (rot === 90)  g.drawImage(bgImg, 0,   -Dp, Wp, Dp);
-    else if (rot === 180) g.drawImage(bgImg, -Wp, -Dp, Wp, Dp);
-    else if (rot === 270) g.drawImage(bgImg, -Wp, 0,   Wp, Dp);
-    else                  g.drawImage(bgImg, 0,   0,   Wp, Dp);
+    if      (rot === 90)  g.drawImage(img, 0,   -Dp, Wp, Dp);
+    else if (rot === 180) g.drawImage(img, -Wp, -Dp, Wp, Dp);
+    else if (rot === 270) g.drawImage(img, -Wp, 0,   Wp, Dp);
+    else                  g.drawImage(img, 0,   0,   Wp, Dp);
     g.restore();
   }
 
@@ -783,7 +808,15 @@ function endPtr(ev) {
   if (!ptrs.has(ev.pointerId)) return;
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (measuring) { measuring = false; }
+  if (measuring) {
+    measuring = false;
+    // no-grid plans calibrate off the ruler: prefill the input with the
+    // measured length so the user just corrects it to the true distance
+    if (!curPlan().gridPx && ruler) {
+      scGrid.value = fmt(Math.hypot(ruler.x2-ruler.x1, ruler.y2-ruler.y1)/100);
+      updateScaleOut();
+    }
+  }
   else if (rotG) { rotG = null; save(); }
   else if (hdl)  { hdl = null;  save(); }
   else if (drag) { if (!moved) handleTap(ev.offsetX, ev.offsetY); else save(); drag = null; }
@@ -805,7 +838,9 @@ cv.addEventListener("wheel", ev => {
 /* ============ hints ============ */
 const hint = document.getElementById("hint");
 function updateHint() {
-  if (scaleMode) hint.textContent = "drag on the plan to measure · adjust grid size until known features check out · APPLY";
+  if (scaleMode) hint.textContent = curPlan().gridPx
+    ? "drag on the plan to measure · adjust grid size until known features check out · APPLY"
+    : "drag a line over a known distance · type its true length in m · APPLY";
   else if (editing()) hint.textContent = "tap a part to select it · drag handles to resize · ✓ DONE to finish";
   else if (sel()) hint.textContent = "drag body to move · drag knob to rotate (45°) · double-tap to edit";
   else hint.textContent = "tap item to select · double-tap to edit · drag/pinch to pan & zoom";
@@ -955,9 +990,14 @@ document.getElementById("ebDone").addEventListener("click", exitEdit);
 /* ============ scale calibration mode ============ */
 const scalebar = document.getElementById("scalebar");
 const scGrid = document.getElementById("scGrid"), scOut = document.getElementById("scOut");
-function candScale() {           // cm per image px from the input's grid size
-  const g = parseFloat(scGrid.value);
-  return g > 0 ? g*100/IMG.gridPx : S.scale;
+const scLabel = document.getElementById("scLabel");
+const rulerImgPx = ()=>ruler ? Math.hypot(ruler.x2-ruler.x1, ruler.y2-ruler.y1)/S.scale : 0;
+function candScale() {           // candidate cm per image px from the input
+  const v = parseFloat(scGrid.value);
+  const p = curPlan();
+  if (p.gridPx) return v > 0 ? v*100/p.gridPx : S.scale;      // grid square = v meters
+  const ipx = rulerImgPx();                                   // drawn ruler = v meters
+  return (v > 0 && ipx > 1) ? v*100/ipx : S.scale;
 }
 function updateScaleOut() {
   const k = candScale()/S.scale;
@@ -968,7 +1008,9 @@ function enterScale() {
   if (editing()) exitEdit();
   select(null);
   scaleMode = true; ruler = null;
-  scGrid.value = fmt(S.scale*IMG.gridPx/100);
+  const p = curPlan();
+  scLabel.textContent = p.gridPx ? "GRID □" : "RULER =";
+  scGrid.value = p.gridPx ? fmt(S.scale*p.gridPx/100) : "";
   scalebar.classList.add("show");
   updateScaleOut(); updateHint(); draw();
 }
@@ -1045,7 +1087,7 @@ const fGrid = document.getElementById("fGrid"), fBg = document.getElementById("f
 function floorInfo() {
   document.getElementById("floorInfo").textContent =
     `${fmt(fromCm(S.floor.w,S.unit))} × ${fmt(fromCm(S.floor.d,S.unit))} ${S.unit}` +
-    (S.bg ? " · Vån 1" : "");
+    (S.bg ? " · " + curPlan().name : "");
 }
 document.getElementById("btnFloor").addEventListener("click", ()=>{
   fUnit.value = S.unit;
@@ -1087,8 +1129,34 @@ document.getElementById("fRotPlan").addEventListener("click", ()=>{
   save(); floorInfo(); closeSheet(); fitView(); select(selId);
 });
 
-/* --- menu: export / import --- */
-document.getElementById("btnMenu").addEventListener("click", ()=>openSheet("menu"));
+/* --- menu: floor plan picker + export / import --- */
+const planList = document.getElementById("planList");
+function renderPlanList() {
+  planList.innerHTML = "";
+  for (const id in PLANS) {
+    const p = PLANS[id];
+    const b = document.createElement("button");
+    b.className = "preset";
+    b.innerHTML = `<b>${p.name}</b><small>${id === S.plan ? "✓ active" : "tap to switch"}</small>`;
+    if (id === S.plan) b.style.borderColor = "var(--accent)";
+    b.addEventListener("click", ()=>setPlan(id));
+    planList.appendChild(b);
+  }
+}
+function setPlan(id) {
+  if (id === S.plan) { closeSheet(); return; }
+  if (editing()) exitEdit();
+  if (scaleMode) exitScale();
+  S.planScales = S.planScales || {};
+  S.planScales[S.plan] = S.scale;               // remember calibration
+  S.plan = id;
+  S.scale = S.planScales[id] > 0 ? S.planScales[id] : PLANS[id].defScale;
+  S.bgRot = 0;
+  S.bg = true;
+  S.floor = { w:Math.round(planW()), d:Math.round(planD()) };
+  save(); floorInfo(); closeSheet(); select(null); fitView();
+}
+document.getElementById("btnMenu").addEventListener("click", ()=>{ renderPlanList(); openSheet("menu"); });
 async function download(name, blob) {
   // On touch devices (iPad/phone, incl. installed PWAs where plain anchor
   // downloads often do nothing) offer the native share sheet: user can save

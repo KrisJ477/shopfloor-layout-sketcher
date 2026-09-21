@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "sfls-v7";
+const CACHE = "sfls-v8";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,7 @@ const ASSETS = [
   "./icon.svg",
   "./icon-maskable.svg",
   "./floorplan.png",
+  "./floorplan-argongatan.png",
 ];
 
 self.addEventListener("install", ev => {
