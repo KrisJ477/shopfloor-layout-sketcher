@@ -1,5 +1,5 @@
 "use strict";
-const CACHE = "sfls-v2";
+const CACHE = "sfls-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -21,27 +21,34 @@ self.addEventListener("activate", ev => {
   );
 });
 
-// network-first for navigation (so updates land), cache-first for the rest
+// Offline-first: navigations are served from cache immediately (no waiting on
+// a dead network) and refreshed in the background so updates land next visit.
+// Everything else is cache-first. Cross-origin requests are left alone.
 self.addEventListener("fetch", ev => {
   const req = ev.request;
-  if (req.method !== "GET") return;
+  if (req.method !== "GET" || !req.url.startsWith(self.location.origin)) return;
   if (req.mode === "navigate") {
-    ev.respondWith(
-      fetch(req)
-        .then(res => {
+    ev.respondWith((async () => {
+      const cached = await caches.match("./index.html");
+      const network = fetch(req).then(res => {
+        if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put("./index.html", copy));
-          return res;
-        })
-        .catch(() => caches.match("./index.html"))
-    );
+        }
+        return res;
+      });
+      if (cached) { network.catch(()=>{}); return cached; }
+      return network.catch(()=>caches.match("./index.html"));
+    })());
     return;
   }
   ev.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(res => {
-      const copy = res.clone();
-      caches.open(CACHE).then(c => c.put(req, copy));
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(req, copy));
+      }
       return res;
-    }))
+    }).catch(()=>Response.error()))
   );
 });
